@@ -62,7 +62,7 @@ fi
 
 write_updater_script() {
     local msg_checking msg_up_to_date msg_updating msg_ok msg_fail msg_skip
-    local msg_refreshing msg_running msg_proceeding msg_review msg_wrong msg_enter
+    local msg_refreshing msg_running msg_proceeding msg_review msg_wrong
 
     msg_checking="$(msg checking_self)"
     msg_up_to_date="$(msg self_up_to_date)"
@@ -75,7 +75,6 @@ write_updater_script() {
     msg_proceeding="$(msg proceeding)"
     msg_review="$(msg review)"
     msg_wrong="$(msg something_wrong)"
-    msg_enter="$(msg press_enter)"
 
     cat > "$TMP_SCRIPT" << EOF
 #!/bin/bash
@@ -96,7 +95,6 @@ MSG_RUNNING=$(printf '%q' "$msg_running")
 MSG_PROCEEDING=$(printf '%q' "$msg_proceeding")
 MSG_REVIEW=$(printf '%q' "$msg_review")
 MSG_WRONG=$(printf '%q' "$msg_wrong")
-MSG_ENTER=$(printf '%q' "$msg_enter")
 
 GITHUB_API="https://api.github.com/repos/jpmsb/update-manager/releases/latest"
 PACKAGE_NAME="update-manager"
@@ -207,11 +205,6 @@ run_upgrade() {
     if [ "\$rc" -ne 0 ]; then
         box "\$MSG_WRONG"
     fi
-
-    echo
-    echo "\$MSG_ENTER"
-    # Read from the controlling terminal so Enter works under pkexec/sudo.
-    read -r _ <>/dev/tty || true
 }
 
 signal_file=\$(mktemp)
@@ -220,14 +213,26 @@ self_update_update_manager
 
 refresh_repos "pkcon get-updates"
 stop_packagekit "\$signal_file" 3 &
+disown || true
 run_upgrade "/usr/bin/zypper dist-upgrade --auto-agree-with-licenses --replacefiles --force-resolution"
 
-rm -rf /var/tmp/rpm-tmp.*
-rm -rf /var/tmp/zypp.*
+rm -rf /var/tmp/rpm-tmp.* /var/tmp/zypp.*
 rm -f /var/log/update-checker/updates.xml
 exit 0
 EOF
     chmod +x "$TMP_SCRIPT"
+}
+
+wait_for_enter() {
+    echo
+    echo "$(msg press_enter)"
+    # Must run in the outer process (xfce4-terminal -e), not under pkexec:
+    # pkexec often has a different tty/stdin, so Enter never reaches an inner read.
+    if [ -r /dev/tty ] && [ -w /dev/tty ]; then
+        read -r _ </dev/tty || true
+    else
+        read -r _ || true
+    fi
 }
 
 if [ -z "${1:-}" ] && [ "$RUN_PRIVILEGED" = "/usr/bin/pkexec" ]; then
@@ -243,7 +248,11 @@ else
     write_updater_script
     "$RUN_PRIVILEGED" bash "$TMP_SCRIPT"
     rm -f "$TMP_SCRIPT"
-    dbus-send --session --type=method_call \
+
+    wait_for_enter
+
+    # Do not block terminal close if the viewer is slow/absent.
+    timeout 3 dbus-send --session --type=method_call \
         --dest=org.updateViewer /org/updateViewer \
-        org.updateViewer.Manager.poll_updates || true
+        org.updateViewer.Manager.poll_updates >/dev/null 2>&1 || true
 fi

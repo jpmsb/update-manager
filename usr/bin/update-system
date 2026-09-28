@@ -208,7 +208,10 @@ run_upgrade() {
         box "\$MSG_WRONG"
     fi
 
-    read -rep \$'\\n'"\$MSG_ENTER"\$'\\n'
+    echo
+    echo "\$MSG_ENTER"
+    # Read from the controlling terminal so Enter works under pkexec/sudo.
+    read -r _ <>/dev/tty || true
 }
 
 signal_file=\$(mktemp)
@@ -222,6 +225,7 @@ run_upgrade "/usr/bin/zypper dist-upgrade --auto-agree-with-licenses --replacefi
 rm -rf /var/tmp/rpm-tmp.*
 rm -rf /var/tmp/zypp.*
 rm -f /var/log/update-checker/updates.xml
+exit 0
 EOF
     chmod +x "$TMP_SCRIPT"
 }

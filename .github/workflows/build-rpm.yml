@@ -1,0 +1,69 @@
+name: Build RPM and publish release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Compute version
+        id: ver
+        run: |
+          VERSION="$(date -u +%Y.%m.%d.%H%M)"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Building update-manager-$VERSION"
+
+      - name: Build source tarball
+        run: |
+          chmod +x scripts/build-source-tarball.sh
+          scripts/build-source-tarball.sh "${{ steps.ver.outputs.version }}"
+
+      - name: Build RPM inside openSUSE Tumbleweed
+        run: |
+          VERSION="${{ steps.ver.outputs.version }}"
+          docker run --rm \
+            -v "$PWD":/workspace \
+            -w /workspace \
+            opensuse/tumbleweed \
+            bash -lc "
+              set -euo pipefail
+              zypper --non-interactive refresh
+              zypper --non-interactive install -y rpm-build gettext-tools tar gzip
+              mkdir -p /tmp/rpmbuild/{BUILD,RPMS,SOURCES,SPECS,SRPMS}
+              cp update-manager-${VERSION}.tar.gz /tmp/rpmbuild/SOURCES/
+              sed \"s/^Version:.*/Version:        ${VERSION}/\" SPECS/update-manager.spec \
+                > /tmp/rpmbuild/SPECS/update-manager.spec
+              rpmbuild --define '_topdir /tmp/rpmbuild' -ba /tmp/rpmbuild/SPECS/update-manager.spec
+              cp /tmp/rpmbuild/RPMS/noarch/update-manager-*.rpm /workspace/
+            "
+          RPM_FILE="$(ls -1 update-manager-*.rpm | head -n1)"
+          test -n "$RPM_FILE"
+          echo "rpm_file=$RPM_FILE" >> "$GITHUB_OUTPUT"
+          echo "Built $RPM_FILE"
+        id: rpm
+
+      - name: Publish GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.ver.outputs.version }}
+          RPM_FILE: ${{ steps.rpm.outputs.rpm_file }}
+        run: |
+          set -euo pipefail
+          if git rev-parse "refs/tags/${VERSION}" >/dev/null 2>&1; then
+            echo "Tag ${VERSION} already exists; refusing to overwrite."
+            exit 1
+          fi
+          gh release create "$VERSION" \
+            --title "update-manager $VERSION" \
+            --notes "Automated build of update-manager $VERSION." \
+            "$RPM_FILE"

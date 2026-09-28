@@ -1,0 +1,577 @@
+# Japanese translations for update-viewer
+# Copyright (C) 2024
+msgid ""
+msgstr ""
+"Project-Id-Version: update-viewer\n"
+"Report-Msgid-Bugs-To: \n"
+"POT-Creation-Date: 2025-12-28 20:45-0300\n"
+"Language: ja\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=1; plural=0;\n"
+
+#: update-viewer.py:233
+#, python-brace-format
+msgid "[update-viewer] Arquivo de configuração criado em: {}"
+msgstr "[update-viewer] 設定ファイルが作成されました: {}"
+
+#: update-viewer.py:271
+#, python-brace-format
+msgid "[update-viewer] Aviso: Erro ao processar '{}': {}. Usando valor padrão."
+msgstr ""
+"[update-viewer] 警告: '{}' の処理エラー: {}。デフォルト値を使用します。"
+
+#: update-viewer.py:280
+#, python-brace-format
+msgid ""
+"[update-viewer] Erro ao ler arquivo de configuração: {}. Usando valores "
+"padrão."
+msgstr ""
+"[update-viewer] 設定ファイルの読み取りエラー: {}。デフォルト値を使用します。"
+
+#: update-viewer.py:395 update-viewer.py:431
+msgid "segundos"
+msgstr "秒"
+
+#: update-viewer.py:395 update-viewer.py:431
+msgid "minutos"
+msgstr "分"
+
+#: update-viewer.py:395 update-viewer.py:431
+msgid "horas"
+msgstr "時間"
+
+#: update-viewer.py:395 update-viewer.py:431
+msgid "dias"
+msgstr "日"
+
+#: update-viewer.py:439 update-viewer.py:899 update-viewer.py:1270
+#: update-viewer.py:1473 update-viewer.py:1555
+msgid "Preferências"
+msgstr "設定"
+
+#: update-viewer.py:464
+msgid "Intervalos"
+msgstr "間隔"
+
+#: update-viewer.py:470
+msgid "Intervalo de atualização:"
+msgstr "更新間隔:"
+
+#: update-viewer.py:479
+msgid "Intervalo após primeira execução bem-sucedida:"
+msgstr "初回成功実行後の間隔:"
+
+#: update-viewer.py:490
+msgid "Idioma"
+msgstr "言語"
+
+#: update-viewer.py:495
+msgid "Idioma da interface:"
+msgstr "インターフェース言語:"
+
+#: update-viewer.py:500
+msgid "Automático"
+msgstr "自動"
+
+#: update-viewer.py:522
+msgid "Comportamento do lembrete"
+msgstr "リマインダーの動作"
+
+#: update-viewer.py:528
+msgid "Intervalo para lembrar mais tarde:"
+msgstr "後で思い出す間隔:"
+
+#: update-viewer.py:537
+msgid "Quando o tempo de espera terminar, mostrar:"
+msgstr "待機時間が終了したら表示:"
+
+#: update-viewer.py:541
+msgid "janela"
+msgstr "ウィンドウ"
+
+#: update-viewer.py:542
+msgid "notificação"
+msgstr "通知"
+
+#: update-viewer.py:553
+msgid "Abrir a janela principal ao clicar na notificação"
+msgstr "通知をクリックしてメインウィンドウを開く"
+
+#: update-viewer.py:567
+msgid "Arquivos"
+msgstr "ファイル"
+
+#: update-viewer.py:573
+msgid "Diretório de arquivos:"
+msgstr "ファイルディレクトリ:"
+
+#: update-viewer.py:581
+msgid "Arquivo de atualizações personalizado"
+msgstr "カスタム更新ファイル"
+
+#: update-viewer.py:587
+msgid "Caminho do arquivo XML:"
+msgstr "XMLファイルパス:"
+
+#: update-viewer.py:600 update-viewer.py:626
+msgid "Procurar..."
+msgstr "参照..."
+
+#: update-viewer.py:607
+msgid "Arquivo de log personalizado"
+msgstr "カスタムログファイル"
+
+#: update-viewer.py:613
+msgid "Caminho do arquivo de log:"
+msgstr "ログファイルパス:"
+
+#: update-viewer.py:635
+msgid "Comando de Atualização"
+msgstr "更新コマンド"
+
+#: update-viewer.py:659
+msgid "Restaurar padrões"
+msgstr "デフォルトに戻す"
+
+#: update-viewer.py:663
+msgid "Salvar"
+msgstr "保存"
+
+#: update-viewer.py:665
+msgid "Cancelar"
+msgstr "キャンセル"
+
+#: update-viewer.py:706
+msgid "Selecionar arquivo XML"
+msgstr "XMLファイルを選択"
+
+#: update-viewer.py:706
+msgid "XML Files (*.xml);;All Files (*)"
+msgstr "XMLファイル (*.xml);;すべてのファイル (*)"
+
+#: update-viewer.py:714
+msgid "Selecionar arquivo de log"
+msgstr "ログファイルを選択"
+
+#: update-viewer.py:714
+msgid "Log Files (*.log);;All Files (*)"
+msgstr "ログファイル (*.log);;すべてのファイル (*)"
+
+#: update-viewer.py:822
+msgid "Erro"
+msgstr "エラー"
+
+#: update-viewer.py:822
+#, python-brace-format
+msgid "Erro ao salvar configurações: {}"
+msgstr "設定の保存エラー: {}"
+
+#: update-viewer.py:844
+#, python-brace-format
+msgid "[update-viewer] Erro ao forçar verificação via D-Bus: {}"
+msgstr "[update-viewer] D-Bus経由で確認を強制する際のエラー: {}"
+
+#: update-viewer.py:851 update-viewer.py:1092
+msgid "Atualizações Disponíveis"
+msgstr "利用可能な更新"
+
+#: update-viewer.py:891 update-viewer.py:1098 update-viewer.py:1445
+msgid "Sem atualizações disponíveis."
+msgstr "利用可能な更新はありません。"
+
+#: update-viewer.py:895 update-viewer.py:1101 update-viewer.py:1985
+msgid "Instalar atualizações"
+msgstr "更新をインストール"
+
+#: update-viewer.py:897 update-viewer.py:1102
+msgid "Ver atualizações"
+msgstr "更新を表示"
+
+#: update-viewer.py:900
+msgid "Sobre..."
+msgstr "について..."
+
+#: update-viewer.py:956
+#, python-brace-format
+msgid "Erro ao ler {}: {}"
+msgstr "{} の読み取りエラー: {}"
+
+#: update-viewer.py:974
+#, python-brace-format
+msgid ""
+"Aguardando término do processo 'zypper dist-upgrade'. A janela será exibida "
+"em {}."
+msgstr ""
+"プロセス 'zypper dist-upgrade' の終了を待機中。{} 後にウィンドウが表示されま"
+"す。"
+
+#: update-viewer.py:981
+#, python-brace-format
+msgid ""
+"Forçando exibição imediata da janela pois passaram-se {} desde a primeira "
+"execução, há mais de {} atrás."
+msgstr ""
+"初回実行から {} が経過し、{} 以上前なので、ウィンドウを即座に表示します。"
+
+#: update-viewer.py:989
+#, python-brace-format
+msgid ""
+"Aguardando término do processo 'zypper dist-upgrade' e mais {}. A janela "
+"será exibida em {}."
+msgstr ""
+"プロセス 'zypper dist-upgrade' の終了とさらに {} を待機中。{} 後にウィンドウ"
+"が表示されます。"
+
+#: update-viewer.py:991
+#, python-brace-format
+msgid ""
+"Atualizações disponíveis. A janela será exibida automaticamente em {} se o "
+"usuário não interagir."
+msgstr ""
+"利用可能な更新があります。ユーザーが操作しない場合、{} 後にウィンドウが自動的"
+"に表示されます。"
+
+#: update-viewer.py:1024
+#, python-brace-format
+msgid ""
+"Processo 'zypper dist-upgrade' ainda está em execução. Verificando novamente "
+"em {}."
+msgstr ""
+"プロセス 'zypper dist-upgrade' はまだ実行中です。{} 後に再度確認します。"
+
+#: update-viewer.py:1031
+#, python-brace-format
+msgid "Arquivo {} não encontrado. Atualizando status para 'sem atualizações'."
+msgstr "ファイル {} が見つかりません。ステータスを「更新なし」に更新します。"
+
+#: update-viewer.py:1051
+msgid "0 segundos"
+msgstr "0秒"
+
+#: update-viewer.py:1053
+msgid "1 segundo"
+msgstr "1秒"
+
+#: update-viewer.py:1055
+#, python-brace-format
+msgid "{} segundos"
+msgstr "{}秒"
+
+#: update-viewer.py:1059
+msgid "1 minuto"
+msgstr "1分"
+
+#: update-viewer.py:1061
+#, python-brace-format
+msgid "{} minutos"
+msgstr "{}分"
+
+#: update-viewer.py:1065
+msgid "1 hora"
+msgstr "1時間"
+
+#: update-viewer.py:1067
+#, python-brace-format
+msgid "{} horas"
+msgstr "{}時間"
+
+#: update-viewer.py:1071
+msgid "1 dia"
+msgstr "1日"
+
+#: update-viewer.py:1073
+#, python-brace-format
+msgid "{} dias"
+msgstr "{}日"
+
+#: update-viewer.py:1096
+#, fuzzy, python-brace-format
+msgid "{} atualizações disponíveis."
+msgstr "{} 個の更新が利用可能"
+
+#: update-viewer.py:1141
+#, python-brace-format
+msgid "Lembrando mais tarde. A janela será exibida automaticamente em {}."
+msgstr "後で思い出します。{} 後にウィンドウが自動的に表示されます。"
+
+#: update-viewer.py:1177
+#, python-brace-format
+msgid "Janela fechada. Será exibida novamente em {}."
+msgstr "ウィンドウを閉じました。{} 後に再度表示されます。"
+
+#: update-viewer.py:1240
+msgid "Sem atualizações"
+msgstr "更新なし"
+
+#: update-viewer.py:1291
+msgid "Tudo certo! Sem atualizações disponíveis!"
+msgstr "すべて良好！利用可能な更新はありません！"
+
+#: update-viewer.py:1302
+msgid "OK"
+msgstr "OK"
+
+#: update-viewer.py:1347
+msgid "Atualizando o sistema"
+msgstr "システムを更新中"
+
+#: update-viewer.py:1348
+msgid "As atualizações estão sendo instaladas em segundo plano."
+msgstr "更新はバックグラウンドでインストールされています。"
+
+#: update-viewer.py:1360
+msgid "Verificando atualizações..."
+msgstr "更新を確認中..."
+
+#: update-viewer.py:1404 update-viewer.py:1495
+#, python-brace-format
+msgid ""
+"Erro ao verificar atualizações. {} erros encontrados. Não há atualizações "
+"disponíveis."
+msgstr ""
+"更新の確認エラー。{} 個のエラーが見つかりました。利用可能な更新はありません。"
+
+#: update-viewer.py:1432 update-viewer.py:1458 update-viewer.py:1530
+#, python-brace-format
+msgid "Há {} pacotes que serão atualizados."
+msgstr "更新されるパッケージが {} 個あります。"
+
+#: update-viewer.py:1460 update-viewer.py:1566
+msgid "Pesquise por pacotes..."
+msgstr "パッケージを検索..."
+
+#: update-viewer.py:1466 update-viewer.py:1604
+msgid "Atualizar agora"
+msgstr "今すぐ更新"
+
+#: update-viewer.py:1469 update-viewer.py:1633 update-viewer.py:1984
+msgid "Lembrar mais tarde"
+msgstr "後で思い出す"
+
+#: update-viewer.py:1576
+#, python-brace-format
+msgid "Tamanho do download: {}"
+msgstr "ダウンロードサイズ: {}"
+
+#: update-viewer.py:1591
+msgid ""
+"É necessário reiniciar o sistema para que algumas alterações entrem em vigor."
+msgstr "一部の変更を有効にするには、システムの再起動が必要です。"
+
+#: update-viewer.py:1707
+msgid "Erro ao analisar o XML de saída."
+msgstr "出力XMLの解析エラー。"
+
+#: update-viewer.py:1722
+msgid "Erro ao analisar o XML de repositórios."
+msgstr "リポジトリXMLの解析エラー。"
+
+#: update-viewer.py:1731
+#, python-brace-format
+msgid "Pacotes que serão atualizados ({})"
+msgstr "更新されるパッケージ ({})"
+
+#: update-viewer.py:1737
+#, python-brace-format
+msgid "Pacotes novos que serão instalados ({})"
+msgstr "新しくインストールされるパッケージ ({})"
+
+#: update-viewer.py:1743
+#, python-brace-format
+msgid "Pacotes que serão removidos ({})"
+msgstr "削除されるパッケージ ({})"
+
+#: update-viewer.py:1749
+#, python-brace-format
+msgid "Pacotes que mudarão de arquitetura ({})"
+msgstr "アーキテクチャが変更されるパッケージ ({})"
+
+#: update-viewer.py:1782
+#, python-brace-format
+msgid "Detalhes do pacote: {}"
+msgstr "パッケージの詳細: {}"
+
+#: update-viewer.py:1793
+msgid "Nome:"
+msgstr "名前:"
+
+#: update-viewer.py:1804
+msgid "não disponível"
+msgstr "利用不可"
+
+#: update-viewer.py:1808
+msgid "Versão a ser instalada:"
+msgstr "インストールされるバージョン:"
+
+#: update-viewer.py:1809 update-viewer.py:1825 update-viewer.py:1831
+msgid "Arquitetura:"
+msgstr "アーキテクチャ:"
+
+#: update-viewer.py:1810 update-viewer.py:1819 update-viewer.py:1832
+msgid "Repositório:"
+msgstr "リポジトリ:"
+
+#: update-viewer.py:1811 update-viewer.py:1820 update-viewer.py:1833
+msgid "URL:"
+msgstr "URL:"
+
+#: update-viewer.py:1815 update-viewer.py:1824
+msgid "Versão atual:"
+msgstr "現在のバージョン:"
+
+#: update-viewer.py:1816
+msgid "Versão nova:"
+msgstr "新しいバージョン:"
+
+#: update-viewer.py:1817
+msgid "Arquitetura atual:"
+msgstr "現在のアーキテクチャ:"
+
+#: update-viewer.py:1818
+msgid "Arquitetura nova:"
+msgstr "新しいアーキテクチャ:"
+
+#: update-viewer.py:1829
+msgid "Versão Atual:"
+msgstr "現在のバージョン:"
+
+#: update-viewer.py:1829
+msgid "Não instalado"
+msgstr "インストールされていません"
+
+#: update-viewer.py:1830
+msgid "Versão Nova:"
+msgstr "新しいバージョン:"
+
+#: update-viewer.py:1845
+msgid "Resumo:"
+msgstr "概要:"
+
+#: update-viewer.py:1846
+msgid "Descrição:"
+msgstr "説明:"
+
+#: update-viewer.py:1854
+msgid "Nome"
+msgstr "名前"
+
+#: update-viewer.py:1855
+msgid "Versão"
+msgstr "バージョン"
+
+#: update-viewer.py:1856
+msgid "Descrição"
+msgstr "説明"
+
+#: update-viewer.py:1860
+msgid "Voltar"
+msgstr "戻る"
+
+#: update-viewer.py:1911
+#, python-brace-format
+msgid ""
+"[update-viewer] Aviso: DBus indisponível ({}). Usando fallback sem botões."
+msgstr ""
+"[update-viewer] 警告: DBusが利用できません ({})。ボタンなしの代替手段を使用し"
+"ます。"
+
+#: update-viewer.py:1922
+msgid ""
+"[update-viewer] Aviso: Não foi possível inicializar o serviço D-Bus para "
+"controle externo."
+msgstr ""
+"[update-viewer] 警告: 外部制御用のD-Busサービスを初期化できませんでした。"
+
+#: update-viewer.py:1930
+#, python-brace-format
+msgid "[update-viewer] Serviço D-Bus registrado: {} em {}"
+msgstr "[update-viewer] D-Busサービスが登録されました: {} で {}"
+
+#: update-viewer.py:1934
+#, python-brace-format
+msgid ""
+"[update-viewer] Aviso: Serviço D-Bus já está em uso ou não disponível: {}"
+msgstr ""
+"[update-viewer] 警告: D-Busサービスは既に使用中または利用できません: {}"
+
+#: update-viewer.py:1936
+#, python-brace-format
+msgid "[update-viewer] Erro ao inicializar serviço D-Bus: {}"
+msgstr "[update-viewer] D-Busサービスの初期化エラー: {}"
+
+#: update-viewer.py:1938
+#, python-brace-format
+msgid "[update-viewer] Erro inesperado ao inicializar serviço D-Bus: {}"
+msgstr "[update-viewer] D-Busサービスの初期化中に予期しないエラー: {}"
+
+#: update-viewer.py:1994
+#, python-brace-format
+msgid "{} atualizações disponíveis"
+msgstr "{} 個の更新が利用可能"
+
+#: update-viewer.py:1995
+msgid ""
+"Clique no botão para instalar agora ou no ícone da bandeja para ver detalhes."
+msgstr ""
+"今すぐインストールするにはボタンをクリックするか、トレイアイコンをクリックし"
+"て詳細を表示します。"
+
+#: update-viewer.py:2008
+msgid "Indicador de atualizações de pacotes"
+msgstr "パッケージ更新インジケーター"
+
+#: update-viewer.py:2027
+#, python-brace-format
+msgid "[update-viewer] Falha ao enviar notificação DBus: {}"
+msgstr "[update-viewer] DBus通知の送信に失敗しました: {}"
+
+#: update-viewer.py:2031
+msgid "Atualizações disponíveis"
+msgstr "利用可能な更新"
+
+#: update-viewer.py:2032
+msgid "Abra o menu da bandeja para instalar."
+msgstr "インストールするにはトレイメニューを開いてください。"
+
+#: update-viewer.py:2100 update-viewer.py:2110
+msgid "Sobre"
+msgstr "について"
+
+#: update-viewer.py:2111 update-viewer.py:2166
+msgid "Créditos"
+msgstr "クレジット"
+
+#: update-viewer.py:2131
+msgid "Visualizador de atualizações"
+msgstr "更新ビューアー"
+
+#: update-viewer.py:2137
+msgid "Informa sobre as atualizações de software disponíveis"
+msgstr "利用可能なソフトウェア更新について通知します"
+
+#: update-viewer.py:2143
+msgid "Página do projeto"
+msgstr "プロジェクトページ"
+
+#: update-viewer.py:2153
+msgid "Este programa vem com absolutamente nenhuma garantia."
+msgstr "このプログラムには一切の保証がありません。"
+
+#: update-viewer.py:2172
+#, python-brace-format
+msgid "Inspirado no <a href='{}'>Package Update Indicator</a>"
+msgstr "<a href='{}'>Package Update Indicator</a> に触発されました"
+
+#: update-viewer.py:2216
+#, python-brace-format
+msgid "Erro ao obter repositórios: {}"
+msgstr "リポジトリの取得エラー: {}"
+
+#~ msgid ""
+#~ "Inspirado no <a href='https://code.guido-berhoerster.org/projects/package-"
+#~ "update-indicator/'>Package Update Indicator</a>"
+#~ msgstr ""
+#~ "<a href='https://code.guido-berhoerster.org/projects/package-update-"
+#~ "indicator/'>Package Update Indicator</a> に触発されました"

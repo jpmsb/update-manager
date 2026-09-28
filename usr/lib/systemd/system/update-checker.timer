@@ -1,0 +1,10 @@
+[Unit]
+Description=Timer for the system update checker
+
+[Timer]
+OnBootSec=30s
+OnUnitActiveSec=1h
+AccuracySec=1min
+
+[Install]
+WantedBy=timers.target

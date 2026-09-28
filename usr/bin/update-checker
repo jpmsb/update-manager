@@ -1,0 +1,164 @@
+#!/bin/bash
+
+close_packagekit(){
+    local signal_file=$1
+    local timeout=$2
+    local rounds=$(echo "scale=0; $timeout / 0.1" | bc)
+    local counter=0
+
+    while [ "$counter" -lt "$rounds" ]; do
+        if [ ! -f "$signal_file" ]; then
+            counter=$((counter + 1))
+        fi
+
+        pkill -f "packagekitd" -9
+        sleep 0.1
+    done
+}
+
+
+# This script must be run as root
+if [ "$EUID" -ne 0 ]; then
+  echo "This script must be run as root."
+  exit 1
+fi
+
+LOG_DIR="/var/log/update-checker"
+
+# Create the log directory if it doesn't exist
+mkdir -p "$LOG_DIR"
+
+# Refresh all the repositories
+echo "Refreshing repositories..."
+
+signal_file=$(mktemp)
+close_packagekit $signal_file 3 &
+sleep 1
+rm -f $signal_file
+zypper --gpg-auto-import-keys refresh -f
+
+# Check if there is any update available
+echo "Checking for updates..."
+zypper_list_updates_xml=$(zypper --xmlout list-updates)
+
+# Check if the XML output contains any updates
+packages_names=$(echo "$zypper_list_updates_xml" | xmlstarlet sel -t -m "//update" -v "@name" -n)
+
+if [ -n "$packages_names" ]; then
+  # Run the dist-upgrade subcommand in dry-run mode
+  # to check for package conflicts
+  update_count=$(echo "$packages_names" | wc -l)
+  echo "Found $update_count updates available. Performing a dry-run dist-upgrade to check for conflicts..."
+  zypper_dist_upgrade_dry_run_xml=$(zypper -n --xmlout dist-upgrade -y --dry-run --auto-agree-with-licenses)
+  return_code=$?
+
+  # Register the current date and time
+  current_date=$(date +"%Y-%m-%d %H:%M:%S")
+
+  # Check if is the first run
+  if [ -f "$LOG_DIR/run.log" ]; then
+    first_run_date=$(grep "First run:" "$LOG_DIR/run.log" | awk -F": " '{print $2}')
+
+    if [ -n "$first_run_date" ]; then
+      first_run_date_message="First run date was: $first_run_date"
+      last_run_date_message="Last run date was: $current_date"
+
+      # Update the last run date
+      sed -i "s/^Last run: .*/Last run: $current_date/" "$LOG_DIR/run.log"
+    else
+      echo "First run: $current_date" > "$LOG_DIR/run.log"
+      echo "Last run: $current_date" >> "$LOG_DIR/run.log"
+
+      first_run_date_message="First run date was: $current_date"
+      last_run_date_message="Last run date was: $current_date"
+    fi
+  else
+    echo "First run: $current_date" > "$LOG_DIR/run.log"
+    echo "Last run: $current_date" >> "$LOG_DIR/run.log"
+
+    first_run_date_message="First run date was: $current_date"
+    last_run_date_message="Last run date was: $current_date"
+  fi
+
+  # Check if the dry-run was successful
+  if [ $return_code -ne 0 ]; then
+    dry_run_result_message="Error: zypper dist-upgrade dry-run failed with return code $return_code"
+    last_error_code=$(grep "Last exit code:" "$LOG_DIR/run.log" | awk -F": " '{print $2}')
+
+    if [ -z "$last_error_code" ]; then
+      echo "Last exit code: $return_code" >> "$LOG_DIR/run.log"
+    else
+      sed -i "s/^Last exit code: .*/Last exit code: $return_code/" "$LOG_DIR/run.log"
+    fi
+
+    run_error_count=$(grep "Error count:" "$LOG_DIR/run.log" | awk -F": " '{print $2}')
+
+    if [ -z "$run_error_count" ]; then
+      run_error_count=1
+      error_count_message="Error count: $run_error_count" 
+      echo "$error_count_message" >> "$LOG_DIR/run.log"
+    else
+      run_error_count=$((run_error_count + 1))
+      error_count_message="Error count: $run_error_count"
+      sed -i "s/^Error count: .*/Error count: $run_error_count/" "$LOG_DIR/run.log"
+    fi
+  else
+    dry_run_result_message="Dry-run was successful. No conflicts detected."
+    first_successful_run_date=$(grep "First successful run:" "$LOG_DIR/run.log" | awk -F": " '{print $2}')
+    last_successful_run_date=$(grep "Last successful run:" "$LOG_DIR/run.log" | awk -F": " '{print $2}')
+    
+    if [ -n "$first_successful_run_date" ]; then
+      first_successful_run_date_message="First successful run date was: $first_successful_run_date"
+      last_successful_run_date_message="Last successful run date was: $last_successful_run_date"
+
+      # Update the last successful run date
+      sed -i "s/^Last successful run: .*/Last successful run: $current_date/" "$LOG_DIR/run.log"
+
+      if [ $update_count -eq 1 ]; then
+        sed -i "s/^Status: .*/Status: $update_count update available/" "$LOG_DIR/run.log"
+      else
+        sed -i "s/^Status: .*/Status: $update_count updates available/" "$LOG_DIR/run.log"
+      fi
+    else
+      echo "First successful run: $current_date" >> "$LOG_DIR/run.log"
+      echo "Last successful run: $current_date" >> "$LOG_DIR/run.log"
+
+      if [ $update_count -eq 1 ]; then
+        echo "Status: $update_count update available" >> "$LOG_DIR/run.log"
+      else
+        echo "Status: $update_count updates available" >> "$LOG_DIR/run.log"
+      fi
+    fi
+
+    run_error_count=$(grep "Error count:" "$LOG_DIR/run.log" | awk -F": " '{print $2}')
+    run_error_count_message="Error count: 0"
+    if [ -z "$run_error_count" ]; then
+      echo "Error count: 0" >> "$LOG_DIR/run.log"
+    else
+      sed -i "s/^Error count: .*/Error count: 0/" "$LOG_DIR/run.log"
+    fi
+
+    echo "$zypper_dist_upgrade_dry_run_xml" > "$LOG_DIR/updates.xml"
+  fi
+  
+  # Show the results on the console
+  if [ -n "$dry_run_result_message" ]; then echo -e "$dry_run_result_message"; fi
+  if [ -n "$first_run_date_message" ]; then echo -e "\n$first_run_date_message"; fi
+  if [ -n "$last_run_date_message" ]; then echo -e "$last_run_date_message"; fi
+  if [ -n "$first_successful_run_date_message" ]; then echo -e "\n$first_successful_run_date_message"; fi
+  if [ -n "$last_successful_run_date_message" ]; then echo -e "$last_successful_run_date_message"; fi
+  if [ -n "$run_error_count_message" ]; then echo -e "\n$run_error_count_message"; fi
+else
+  # Clean up old log files if no updates are available
+  echo "No updates available."
+  
+  if [ -f "$LOG_DIR/run.log" ] || [ -f "$LOG_DIR/updates.xml" ]; then
+    echo "Cleaning up old files..."
+    rm -f "$LOG_DIR/updates.xml"
+  fi
+
+  # Update the last run date
+  current_date=$(date +"%Y-%m-%d %H:%M:%S")
+  echo "Last run: $current_date" > "$LOG_DIR/run.log"
+  echo "Status: No updates available" >> "$LOG_DIR/run.log"
+fi

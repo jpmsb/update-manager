@@ -1,0 +1,41 @@
+# Build artifacts
+*.rpm
+*.tar.gz
+*.src.rpm
+*.mo
+
+# Editor / OS noise
+*~
+*.swp
+*.swo
+.DS_Store
+__pycache__/
+*.pyc
+
+# Local experiment / legacy trees (not part of the published repo)
+/backups/
+/pacote/
+/pacote2/
+/pacote-rpm/
+/*.xml
+/run.log
+/run.log_*
+/force-update-check.*
+/install
+/instalar-autostart.sh
+/INSTALACAO_SERVICO.md
+/teste-progresso.py
+/update-manager
+/update-viewer-gtk.py
+/update-viewer.py
+/update-viewer.desktop
+/update-checker
+/update-checker.service
+/update-checker.timer
+/verifica-atualizacao*
+/locale/*.pot
+locale/*/*/*.po~
+
+# Cursor / IDE
+.cursor/
+.vscode/

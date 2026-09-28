@@ -1,0 +1,245 @@
+#!/bin/bash
+# System upgrade launcher with optional self-update of update-manager.
+
+set -euo pipefail
+
+TMP_SCRIPT="/tmp/update_system.$$"
+
+detect_ui_lang() {
+    local lang="${LC_ALL:-${LC_MESSAGES:-${LANG:-en_US.UTF-8}}}"
+    lang="${lang%%.*}"
+    lang="${lang%%_*}"
+    lang=$(echo "$lang" | tr '[:upper:]' '[:lower:]')
+    case "$lang" in
+        pt) echo "pt" ;;
+        *) echo "en" ;;
+    esac
+}
+
+UI_LANG="$(detect_ui_lang)"
+
+msg() {
+    local key="$1"
+    case "$UI_LANG:$key" in
+        pt:terminal_title) echo "Instalar atualizações" ;;
+        pt:checking_self) echo "Verificando atualização do update-manager..." ;;
+        pt:self_up_to_date) echo "update-manager já está na versão mais recente." ;;
+        pt:self_updating) echo "Atualizando update-manager..." ;;
+        pt:self_ok) echo "update-manager atualizado com sucesso." ;;
+        pt:self_fail) echo "Falha ao atualizar update-manager; continuando com a atualização do sistema." ;;
+        pt:self_skip_net) echo "Não foi possível consultar o GitHub; continuando com a atualização do sistema." ;;
+        pt:cleaning_repos) echo "Limpando os repositórios" ;;
+        pt:refreshing_repos) echo "Atualizando as informações dos repositórios" ;;
+        pt:running) echo "Executando" ;;
+        pt:proceeding) echo "Prosseguindo para a atualização dos pacotes..." ;;
+        pt:review) echo "Verifique o que será realizado antes de prosseguir!!" ;;
+        pt:something_wrong) echo "Algo deu errado!! Você pode tentar novamente." ;;
+        pt:press_enter) echo "Pressione ENTER para sair..." ;;
+
+        *:terminal_title) echo "Install updates" ;;
+        *:checking_self) echo "Checking for update-manager updates..." ;;
+        *:self_up_to_date) echo "update-manager is already up to date." ;;
+        *:self_updating) echo "Updating update-manager..." ;;
+        *:self_ok) echo "update-manager updated successfully." ;;
+        *:self_fail) echo "Failed to update update-manager; continuing with the system upgrade." ;;
+        *:self_skip_net) echo "Could not query GitHub; continuing with the system upgrade." ;;
+        *:cleaning_repos) echo "Cleaning repositories" ;;
+        *:refreshing_repos) echo "Refreshing repository metadata" ;;
+        *:running) echo "Running" ;;
+        *:proceeding) echo "Proceeding with package upgrade..." ;;
+        *:review) echo "Review what will be done before continuing!!" ;;
+        *:something_wrong) echo "Something went wrong!! You can try again." ;;
+        *:press_enter) echo "Press ENTER to exit..." ;;
+        *) echo "$key" ;;
+    esac
+}
+
+if [ -n "${DISPLAY:-}" ] && [ -z "${SSH_CONNECTION:-}" ] && [ -z "${SSH_CLIENT:-}" ] && [ -z "${SSH_TTY:-}" ]; then
+    RUN_PRIVILEGED="/usr/bin/pkexec"
+else
+    RUN_PRIVILEGED="/usr/bin/sudo"
+fi
+
+write_updater_script() {
+    local msg_checking msg_up_to_date msg_updating msg_ok msg_fail msg_skip
+    local msg_refreshing msg_running msg_proceeding msg_review msg_wrong msg_enter
+
+    msg_checking="$(msg checking_self)"
+    msg_up_to_date="$(msg self_up_to_date)"
+    msg_updating="$(msg self_updating)"
+    msg_ok="$(msg self_ok)"
+    msg_fail="$(msg self_fail)"
+    msg_skip="$(msg self_skip_net)"
+    msg_refreshing="$(msg refreshing_repos)"
+    msg_running="$(msg running)"
+    msg_proceeding="$(msg proceeding)"
+    msg_review="$(msg review)"
+    msg_wrong="$(msg something_wrong)"
+    msg_enter="$(msg press_enter)"
+
+    cat > "$TMP_SCRIPT" << EOF
+#!/bin/bash
+set -u
+
+export ZYPP_CURL2=1
+export ZYPP_PCK_PRELOAD=1
+export ZYPP_MEDIANETWORK=1
+
+MSG_CHECKING=$(printf '%q' "$msg_checking")
+MSG_UP_TO_DATE=$(printf '%q' "$msg_up_to_date")
+MSG_UPDATING=$(printf '%q' "$msg_updating")
+MSG_OK=$(printf '%q' "$msg_ok")
+MSG_FAIL=$(printf '%q' "$msg_fail")
+MSG_SKIP=$(printf '%q' "$msg_skip")
+MSG_REFRESHING=$(printf '%q' "$msg_refreshing")
+MSG_RUNNING=$(printf '%q' "$msg_running")
+MSG_PROCEEDING=$(printf '%q' "$msg_proceeding")
+MSG_REVIEW=$(printf '%q' "$msg_review")
+MSG_WRONG=$(printf '%q' "$msg_wrong")
+MSG_ENTER=$(printf '%q' "$msg_enter")
+
+GITHUB_API="https://api.github.com/repos/jpmsb/update-manager/releases/latest"
+PACKAGE_NAME="update-manager"
+
+box() {
+    local sentence="\$1"
+    local sentence_length=\${#sentence}
+    local horizontal_spacing=\$((sentence_length + 2))
+    local left_upper="╔" right_upper="╗" left_bottom="╚" right_bottom="╝"
+    local horizontal="═" vertical="║" horizontal_line=""
+
+    local i
+    for i in \$(seq 1 "\$horizontal_spacing"); do
+        horizontal_line="\${horizontal}\${horizontal_line}"
+    done
+
+    echo "\${left_upper}\${horizontal_line}\${right_upper}"
+    echo "\${vertical}\${horizontal_line//\$horizontal/ }\${vertical}"
+    echo "\${vertical} \${sentence} \${vertical}"
+    echo "\${vertical}\${horizontal_line//\$horizontal/ }\${vertical}"
+    echo "\${left_bottom}\${horizontal_line}\${right_bottom}"
+}
+
+version_gt() {
+    # Return 0 if \$1 > \$2 (RPM-ish dotted versions), using sort -V.
+    local newer
+    newer=\$(printf '%s\\n%s\\n' "\$1" "\$2" | sort -V | tail -n1)
+    [ "\$newer" = "\$1" ] && [ "\$1" != "\$2" ]
+}
+
+self_update_update_manager() {
+    box "\$MSG_CHECKING"
+
+    local json tag rpm_url current tmp_rpm
+    if ! json=\$(curl -fsSL -H "Accept: application/vnd.github+json" "\$GITHUB_API" 2>/dev/null); then
+        box "\$MSG_SKIP"
+        return 0
+    fi
+
+    tag=\$(printf '%s' "\$json" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("tag_name",""))' 2>/dev/null || true)
+    rpm_url=\$(printf '%s' "\$json" | python3 -c '
+import json,sys
+data=json.load(sys.stdin)
+for a in data.get("assets",[]):
+    name=a.get("name","")
+    if name.endswith(".rpm") and "update-manager" in name:
+        print(a.get("browser_download_url",""))
+        break
+' 2>/dev/null || true)
+
+    if [ -z "\$tag" ] || [ -z "\$rpm_url" ]; then
+        box "\$MSG_SKIP"
+        return 0
+    fi
+
+    current=\$(rpm -q --qf '%{VERSION}' "\$PACKAGE_NAME" 2>/dev/null || echo "0")
+
+    if ! version_gt "\$tag" "\$current"; then
+        box "\$MSG_UP_TO_DATE"
+        return 0
+    fi
+
+    box "\$MSG_UPDATING"
+    tmp_rpm=\$(mktemp /tmp/update-manager-XXXXXX.rpm)
+    if curl -fsSL -o "\$tmp_rpm" "\$rpm_url" && rpm -Uvh "\$tmp_rpm"; then
+        box "\$MSG_OK"
+    else
+        box "\$MSG_FAIL"
+    fi
+    rm -f "\$tmp_rpm"
+}
+
+refresh_repos() {
+    local command="\$1"
+    box "\$MSG_REFRESHING"
+    box "\$MSG_RUNNING \\"\$command\\""
+    \$command
+    sleep 1
+}
+
+stop_packagekit() {
+    local signal_file="\$1"
+    local timeout="\$2"
+    local rounds counter=0
+    rounds=\$(echo "scale=0; \$timeout / 0.1" | bc)
+
+    while [ "\$counter" -lt "\$rounds" ]; do
+        if [ ! -f "\$signal_file" ]; then
+            counter=\$((counter + 1))
+        fi
+        pkill -f "packagekitd" -9 2>/dev/null || true
+        sleep 0.1
+    done
+}
+
+run_upgrade() {
+    local command="\$1"
+    echo "" > /run/zypp.pid
+
+    box "\$MSG_PROCEEDING"
+    box "\$MSG_RUNNING \\"\$command\\""
+    box "\$MSG_REVIEW"
+
+    rm -f "\$signal_file"
+    \$command
+    local rc=\$?
+
+    if [ "\$rc" -ne 0 ]; then
+        box "\$MSG_WRONG"
+    fi
+
+    read -rep \$'\\n'"\$MSG_ENTER"\$'\\n'
+}
+
+signal_file=\$(mktemp)
+
+self_update_update_manager
+
+refresh_repos "pkcon get-updates"
+stop_packagekit "\$signal_file" 3 &
+run_upgrade "/usr/bin/zypper dist-upgrade --auto-agree-with-licenses --replacefiles --force-resolution"
+
+rm -rf /var/tmp/rpm-tmp.*
+rm -rf /var/tmp/zypp.*
+rm -f /var/log/update-checker/updates.xml
+EOF
+    chmod +x "$TMP_SCRIPT"
+}
+
+if [ -z "${1:-}" ] && [ "$RUN_PRIVILEGED" = "/usr/bin/pkexec" ]; then
+    /usr/bin/xfce4-terminal \
+        --hide-menubar \
+        --hide-toolbar \
+        --zoom 1.5 \
+        --maximize \
+        -e "$0 0" \
+        -T "$(msg terminal_title)" \
+        >/dev/null 2>&1 & disown
+else
+    write_updater_script
+    "$RUN_PRIVILEGED" bash "$TMP_SCRIPT"
+    rm -f "$TMP_SCRIPT"
+    dbus-send --session --type=method_call \
+        --dest=org.updateViewer /org/updateViewer \
+        org.updateViewer.Manager.poll_updates || true
+fi

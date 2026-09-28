@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Update Viewer
+Comment=System update viewer
+Exec=/usr/bin/update-viewer
+Icon=system-software-update
+Terminal=false
+Categories=System;Utility;
+StartupNotify=false
+X-GNOME-Autostart-enabled=true

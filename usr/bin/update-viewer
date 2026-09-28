@@ -1,0 +1,2175 @@
+#!/usr/bin/env python3
+
+import sys
+import os
+import subprocess
+import threading
+import xml.etree.ElementTree as ET
+import re
+import shlex
+import gettext
+import locale
+
+from PyQt6.QtWidgets import (
+    QApplication, QWidget, QVBoxLayout, QHBoxLayout, QLabel,
+    QTreeWidget, QTreeWidgetItem, QPushButton, QLineEdit, QDialog,
+    QStackedWidget, QTextEdit, QTabWidget, QSystemTrayIcon, QMenu,
+    QComboBox, QCheckBox, QSpinBox, QScrollArea, QGroupBox, QFileDialog
+)
+from PyQt6.QtCore import Qt, QProcess, QTimer, QSize
+from PyQt6.QtGui import QFont, QIcon, QAction, QPalette
+import dbus
+import dbus.service
+from dbus.mainloop.glib import DBusGMainLoop
+from gi.repository import GLib
+from datetime import datetime
+
+BUS_NAME = "org.freedesktop.Notifications"
+OBJ_PATH = "/org/freedesktop/Notifications"
+IFACE = "org.freedesktop.Notifications"
+
+# DBus service para controle externo
+UPDATE_SERVICE_BUS_NAME = "org.updateViewer"
+UPDATE_SERVICE_OBJ_PATH = "/org/updateViewer"
+UPDATE_SERVICE_IFACE = "org.updateViewer.Manager"
+
+# Intervalo mínimo entre notificações (em segundos)
+# Evita o erro "ExcessNotificationGeneration" do DBus
+MIN_NOTIFICATION_INTERVAL = 60 * 5  # 5 minutos
+
+# ================= Internacionalização (i18n) =================
+
+# Domínio de tradução
+TRANSLATION_DOMAIN = "update-viewer"
+
+# Variável global para função de tradução
+_ = None
+
+def detect_system_language():
+    """
+    Detecta o idioma do sistema e retorna o código de idioma suportado.
+    Retorna 'en' como fallback se o idioma não for suportado.
+    """
+    # Idiomas suportados
+    supported_languages = {
+        'en': 'en',
+        'pt': 'pt_BR',
+        'pt_BR': 'pt_BR',
+        'pt_PT': 'pt_BR',  # Português de Portugal também usa pt_BR
+        'es': 'es',
+        'es_ES': 'es',
+        'es_MX': 'es',
+        'de': 'de',
+        'de_DE': 'de',
+        'de_AT': 'de',
+        'de_CH': 'de',
+        'ja': 'ja',
+        'ja_JP': 'ja',
+    }
+    
+    # Tenta obter o idioma do sistema
+    try:
+        # Primeiro tenta locale.getdefaultlocale()
+        system_lang, _ = locale.getdefaultlocale()
+        if system_lang:
+            # Remove encoding se presente (ex: 'pt_BR.UTF-8' -> 'pt_BR')
+            lang_code = system_lang.split('.')[0]
+            if lang_code in supported_languages:
+                return supported_languages[lang_code]
+    except Exception:
+        pass
+    
+    # Tenta variável de ambiente LANG
+    try:
+        lang_env = os.environ.get('LANG', '')
+        if lang_env:
+            lang_code = lang_env.split('.')[0].split('_')[0]
+            if lang_code in supported_languages:
+                return supported_languages[lang_code]
+    except Exception:
+        pass
+    
+    # Fallback para inglês
+    return 'en'
+
+def init_i18n(lang=None):
+    """
+    Inicializa o sistema de internacionalização usando gettext.
+    
+    Args:
+        lang: Código de idioma ('auto', 'en', 'pt_BR', 'es', 'de', 'ja') ou None para auto-detectar
+    
+    Returns:
+        Função de tradução _()
+    """
+    global _
+    
+    # Determina qual idioma usar
+    if lang is None or lang == 'auto' or lang == '':
+        target_lang = detect_system_language()
+    else:
+        target_lang = lang
+    
+    # Caminhos possíveis para os arquivos .mo
+    # 1. Produção: /usr/share/locale
+    # 2. Desenvolvimento: locale/ (relativo ao script)
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    possible_paths = [
+        '/usr/share/locale',
+        os.path.join(script_dir, 'locale'),
+        os.path.join(os.path.dirname(script_dir), 'locale'),
+    ]
+    
+    # Tenta encontrar o arquivo .mo em cada caminho
+    translation = None
+    for locale_path in possible_paths:
+        try:
+            translation = gettext.translation(
+                TRANSLATION_DOMAIN,
+                localedir=locale_path,
+                languages=[target_lang],
+                fallback=True
+            )
+            # Se encontrou uma tradução válida (não é fallback), usa ela
+            if translation and hasattr(translation, '_catalog') and translation._catalog:
+                break
+        except Exception:
+            continue
+    
+    # Se não encontrou tradução, usa gettext sem tradução (retorna string original)
+    if translation is None:
+        translation = gettext.NullTranslations()
+    
+    # Instala a tradução no namespace global
+    translation.install()
+    _ = translation.gettext
+    
+    return _
+
+# Inicializa i18n com auto-detecção
+init_i18n()
+
+# ================= Funções de configuração =================
+
+def eval_math_expression(expr):
+    """
+    Avalia uma expressão matemática simples de forma segura.
+    Aceita apenas números, espaços e operadores básicos (+, -, *, /).
+    """
+    try:
+        # Remove espaços
+        expr = expr.strip()
+        # Valida que contém apenas números, espaços e operadores permitidos
+        if not re.match(r'^[\d\s\+\-\*\/\(\)\.]+$', expr):
+            raise ValueError("Expressão contém caracteres inválidos")
+        # Usa eval com namespace restrito (sem __builtins__) para segurança
+        # A validação com regex garante que só contém operações matemáticas básicas
+        allowed_names = {
+            "__builtins__": {},
+        }
+        # Remove espaços e avalia
+        expr_clean = ''.join(expr.split())
+        result = eval(expr_clean, allowed_names)
+        return int(result) if isinstance(result, float) and result.is_integer() else result
+    except Exception as e:
+        raise ValueError(f"Erro ao avaliar expressão '{expr}': {e}")
+
+def get_config_path():
+    """Retorna o caminho do arquivo de configuração."""
+    config_dir = os.path.join(os.path.expanduser("~"), ".config", "update-viewer")
+    config_file = os.path.join(config_dir, "update-viewer.conf")
+    return config_file
+
+def create_default_config(config_path):
+    """Cria o arquivo de configuração padrão se não existir."""
+    config_dir = os.path.dirname(config_path)
+    os.makedirs(config_dir, exist_ok=True)
+    
+    default_config = """[General]
+# Intervalo para checar se há novas atualizações (em segundos)
+refresh-interval = 60  # 1 minuto
+
+# Intervalo para forçar a exibição da janela caso o usuário não interaja (em segundos)
+interval-after-first-successful-run = 60 * 60 * 24 * 7  # 7 dias
+
+# Intervalo para lembrar mais tarde (em segundos)
+interval-remind-later = 60 * 60  # 1 hora
+
+# O que mostrar após o intervalo de "lembrar mais tarde": "window" ou "notification"
+after-remind-later-show = window
+
+# Define se a janela principal é aberta ao clicar na notificação
+open-window-on-notification-click = true
+
+# Local dos arquivos de log e XML
+update-checker-files-directory = /var/log/update-checker
+
+# Caminho do arquivo XML de atualizações
+# xml-file-path = /var/log/update-checker/updates.xml
+
+# Caminho do arquivo de log de execução
+# run-log-file-path = /var/log/update-checker/run.log
+
+# Comando para atualizar o sistema (caminho absoluto, pode incluir argumentos)
+update-command = /usr/bin/update-system
+
+# Idioma da interface (auto, en, pt_BR, es, de, ja)
+# auto = detecta automaticamente o idioma do sistema
+language = auto
+"""
+    
+    with open(config_path, 'w', encoding='utf-8') as f:
+        f.write(default_config)
+    
+    return True
+
+def load_config():
+    """Carrega as configurações do arquivo de configuração."""
+    config_path = get_config_path()
+    
+    # Cria arquivo padrão se não existir
+    if not os.path.exists(config_path):
+        create_default_config(config_path)
+        print(f"[update-viewer] Arquivo de configuração criado em: {config_path}")
+    
+    config = {}
+    current_section = None
+    
+    try:
+        with open(config_path, 'r', encoding='utf-8') as f:
+            for line in f:
+                # Remove espaços no início e fim
+                line = line.strip()
+                
+                # Ignora linhas vazias e comentários
+                if not line or line.startswith('#'):
+                    continue
+                
+                # Detecta seções [Section]
+                if line.startswith('[') and line.endswith(']'):
+                    current_section = line[1:-1]
+                    continue
+                
+                # Processa chave = valor
+                if '=' in line:
+                    # Separa chave e valor
+                    parts = line.split('=', 1)
+                    key = parts[0].strip()
+                    value = parts[1].strip()
+                    
+                    # Remove comentários do valor (tudo após #)
+                    if '#' in value:
+                        value = value.split('#')[0].strip()
+                    
+                    # Tenta avaliar como expressão matemática se for numérico
+                    if key in ['refresh-interval', 'interval-after-first-successful-run',
+                              'interval-after-zypper-dist-upgrade', 'interval-after-zypper-dist-upgrade-check',
+                              'interval-remind-later']:
+                        try:
+                            config[key] = eval_math_expression(value)
+                        except ValueError as e:
+                            print(f"[update-viewer] Aviso: Erro ao processar '{key}': {e}. Usando valor padrão.")
+                            continue
+                    # Processa valores booleanos
+                    elif key in ['open-window-on-notification-click']:
+                        config[key] = value.lower() in ['true', '1', 'yes', 'on']
+                    else:
+                        config[key] = value
+    
+    except Exception as e:
+        print(f"[update-viewer] Erro ao ler arquivo de configuração: {e}. Usando valores padrão.")
+    
+    # Define valores padrão se não foram encontrados
+    defaults = {
+        'refresh-interval': 60,
+        'interval-after-first-successful-run': 60 * 60 * 24 * 7,
+        'interval-after-zypper-dist-upgrade': 5,
+        'interval-after-zypper-dist-upgrade-check': 10,
+        'interval-remind-later': 60 * 60,
+        'after-remind-later-show': 'window',
+        'open-window-on-notification-click': True,
+        'update-checker-files-directory': '/var/log/update-checker',
+        'update-command': '/usr/bin/update-system',
+        'language': 'auto'
+    }
+    
+    for key, default_value in defaults.items():
+        if key not in config:
+            config[key] = default_value
+    
+    # Define xml-file-path e run-log-file-path baseado em update-checker-files-directory se não especificados
+    if 'xml-file-path' not in config:
+        config['xml-file-path'] = os.path.join(config['update-checker-files-directory'], 'updates.xml')
+    if 'run-log-file-path' not in config:
+        config['run-log-file-path'] = os.path.join(config['update-checker-files-directory'], 'run.log')
+    
+    return config
+
+def save_config(config_dict):
+    """Salva as configurações no arquivo de configuração."""
+    config_path = get_config_path()
+    config_dir = os.path.dirname(config_path)
+    os.makedirs(config_dir, exist_ok=True)
+    
+    # Lê o arquivo existente para preservar comentários e estrutura
+    lines = []
+    if os.path.exists(config_path):
+        with open(config_path, 'r', encoding='utf-8') as f:
+            lines = f.readlines()
+    
+    # Cria um novo conteúdo preservando comentários quando possível
+    output_lines = ["[General]\n"]
+    
+    # Mapeia chaves para seus comentários
+    comments = {
+        'refresh-interval': '# Intervalo para checar se há novas atualizações (em segundos)',
+        'interval-after-first-successful-run': '# Intervalo para forçar a exibição da janela caso o usuário não interaja (em segundos)',
+        'interval-after-zypper-dist-upgrade': '# Intervalo após zypper dist-upgrade (em segundos)',
+        'interval-after-zypper-dist-upgrade-check': '# Intervalo para verificar novamente se zypper dist-upgrade terminou (em segundos)',
+        'interval-remind-later': '# Intervalo para lembrar mais tarde (em segundos)',
+        'after-remind-later-show': '# O que mostrar após o intervalo de "lembrar mais tarde": "window" ou "notification"',
+        'open-window-on-notification-click': '# Define se a janela principal é aberta ao clicar na notificação (true/false)',
+        'update-checker-files-directory': '# Local dos arquivos de log e XML',
+        'xml-file-path': '# Caminho do arquivo XML de atualizações',
+        'run-log-file-path': '# Caminho do arquivo de log de execução',
+        'update-command': '# Comando para atualizar o sistema (caminho absoluto, pode incluir argumentos)',
+        'language': '# Idioma da interface (auto, en, pt_BR, es, de, ja)'
+    }
+    
+    # Escreve as configurações
+    for key, value in config_dict.items():
+        if key in comments:
+            output_lines.append(f"{comments[key]}\n")
+        # Converte booleanos para strings
+        if isinstance(value, bool):
+            value_str = "true" if value else "false"
+        else:
+            value_str = str(value)
+        output_lines.append(f"{key} = {value_str}\n")
+        output_lines.append("\n")
+    
+    # Salva o arquivo
+    with open(config_path, 'w', encoding='utf-8') as f:
+        f.writelines(output_lines)
+    
+    return True
+
+# Carrega configurações ao importar o módulo
+_CONFIG = load_config()
+
+# Recarrega i18n com a configuração de idioma se especificada
+# Isso garante que o idioma correto seja usado desde o início
+if 'language' in _CONFIG:
+    _ = init_i18n(_CONFIG['language'])
+else:
+    # Se não houver configuração, usa auto-detecção
+    _ = init_i18n('auto')
+
+# ================= Variáveis de controle (carregadas do arquivo de configuração) =================
+CHECK_INTERVAL = _CONFIG['refresh-interval']
+INTERVAL_AFTER_FIRST_SUCCESSFUL_RUN = _CONFIG['interval-after-first-successful-run']
+INTERVAL_AFTER_ZYPPER_DIST_UPGRADE = _CONFIG['interval-after-zypper-dist-upgrade']
+INTERVAL_AFTER_ZYPPER_DIST_UPGRADE_CHECK = _CONFIG['interval-after-zypper-dist-upgrade-check']
+INTERVAL_REMIND_LATER = _CONFIG['interval-remind-later']
+OPEN_WINDOW_ON_NOTIFICATION_CLICK = _CONFIG['open-window-on-notification-click']
+AFTER_REMIND_LATER_SHOW = _CONFIG['after-remind-later-show']
+DEFAULT_UPDATE_CHECKER_FILES_DIRECTORY = _CONFIG['update-checker-files-directory']
+DEFAULT_XML_FILE_PATH = _CONFIG['xml-file-path']
+DEFAULT_RUN_LOG_FILE_PATH = _CONFIG['run-log-file-path']
+UPDATE_COMMAND = _CONFIG['update-command']
+
+# =========================================================
+
+class TimeIntervalWidget(QWidget):
+    """Widget para editar intervalos de tempo com spinbox e unidade."""
+    def __init__(self, initial_seconds=0, parent=None):
+        super().__init__(parent)
+        layout = QHBoxLayout()
+        layout.setContentsMargins(0, 0, 0, 0)
+        
+        self.spinbox = QSpinBox()
+        self.spinbox.setMinimum(0)
+        self.spinbox.setMaximum(999999)
+        
+        self.unit_combo = QComboBox()
+        self.unit_combo.addItems(["segundos", "minutos", "horas", "dias"])
+        
+        # Converte segundos iniciais para a melhor unidade
+        self.set_seconds(initial_seconds)
+        
+        layout.addWidget(self.spinbox)
+        layout.addWidget(self.unit_combo)
+        self.setLayout(layout)
+    
+    def set_seconds(self, seconds):
+        """Define o valor em segundos."""
+        if seconds < 60:
+            self.spinbox.setValue(seconds)
+            self.unit_combo.setCurrentIndex(0)  # segundos
+        elif seconds < 3600:
+            self.spinbox.setValue(seconds // 60)
+            self.unit_combo.setCurrentIndex(1)  # minutos
+        elif seconds < 86400:
+            self.spinbox.setValue(seconds // 3600)
+            self.unit_combo.setCurrentIndex(2)  # horas
+        else:
+            self.spinbox.setValue(seconds // 86400)
+            self.unit_combo.setCurrentIndex(3)  # dias
+    
+    def get_seconds(self):
+        """Retorna o valor em segundos."""
+        value = self.spinbox.value()
+        unit_index = self.unit_combo.currentIndex()
+        multipliers = [1, 60, 3600, 86400]  # segundos, minutos, horas, dias
+        return value * multipliers[unit_index]
+
+class ConfigDialog(QDialog):
+    """Diálogo de configurações."""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(_("Preferências"))
+        # Define como não-modal para permitir fechar a janela principal
+        self.setModal(False)
+        # Armazena referência ao parent para atualizar configurações
+        self.parent_manager = parent
+        
+        # Carrega configurações atuais
+        self.current_config = load_config()
+        
+        # Layout principal - cria diretamente no diálogo para garantir que as margens sejam aplicadas
+        main_layout = QVBoxLayout(self)
+        main_layout.setContentsMargins(15, 10, 15, 10)
+        main_layout.setSpacing(0)
+        
+        # Área de rolagem
+        self.scroll = QScrollArea()
+        self.scroll.setWidgetResizable(True)
+        self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.scroll_widget = QWidget()
+        scroll_layout = QVBoxLayout()
+        scroll_layout.setContentsMargins(0, 0, 0, 0)
+        scroll_layout.setSpacing(0)
+        
+        # Grupo: Intervalos
+        intervals_group = QGroupBox(_("Intervalos"))
+        intervals_group.setFlat(True)
+        intervals_layout = QVBoxLayout()
+        
+        # Refresh interval
+        refresh_layout = QHBoxLayout()
+        refresh_layout.addWidget(QLabel(_("Intervalo de verificação por atualizações:")))
+        refresh_layout.addStretch()  # Empurra o widget para a direita
+        self.refresh_widget = TimeIntervalWidget(self.current_config.get('refresh-interval', 60))
+        self.refresh_widget.setMinimumWidth(200)  # Define largura mínima para alinhamento
+        refresh_layout.addWidget(self.refresh_widget)
+        intervals_layout.addLayout(refresh_layout)
+        
+        # Interval after first successful run
+        first_run_layout = QHBoxLayout()
+        first_run_layout.addWidget(QLabel(_("Intervalo após primeira execução bem-sucedida:")))
+        first_run_layout.addStretch()  # Empurra o widget para a direita
+        self.first_run_widget = TimeIntervalWidget(self.current_config.get('interval-after-first-successful-run', 604800))
+        self.first_run_widget.setMinimumWidth(200)  # Define largura mínima para alinhamento
+        first_run_layout.addWidget(self.first_run_widget)
+        intervals_layout.addLayout(first_run_layout)
+        
+        intervals_group.setLayout(intervals_layout)
+        scroll_layout.addWidget(intervals_group)
+        
+        # Grupo: Idioma
+        language_group = QGroupBox(_("Idioma"))
+        language_group.setFlat(True)
+        language_layout = QVBoxLayout()
+        
+        language_combo_layout = QHBoxLayout()
+        language_combo_layout.addWidget(QLabel(_("Idioma da interface:")))
+        language_combo_layout.addStretch()
+        self.language_combo = QComboBox()
+        # Adiciona opções: Automático (traduzido), English, Português (Brasil), Español, Deutsch, 日本語
+        # O texto "Automático" será traduzido dinamicamente
+        self.language_combo.addItem(_("Automático"), "auto")
+        self.language_combo.addItem("English", "en")
+        self.language_combo.addItem("Português (Brasil)", "pt_BR")
+        self.language_combo.addItem("Español", "es")
+        self.language_combo.addItem("Deutsch", "de")
+        self.language_combo.addItem("日本語", "ja")
+        
+        # Define o idioma atual
+        current_lang = self.current_config.get('language', 'auto')
+        for i in range(self.language_combo.count()):
+            if self.language_combo.itemData(i) == current_lang:
+                self.language_combo.setCurrentIndex(i)
+                break
+        
+        self.language_combo.setMinimumWidth(200)
+        language_combo_layout.addWidget(self.language_combo)
+        language_layout.addLayout(language_combo_layout)
+        
+        language_group.setLayout(language_layout)
+        scroll_layout.addWidget(language_group)
+        
+        # Grupo: Comportamento
+        behavior_group = QGroupBox(_("Comportamento do lembrete"))
+        behavior_group.setFlat(True)
+        behavior_layout = QVBoxLayout()
+        
+        # Interval remind later
+        remind_layout = QHBoxLayout()
+        remind_layout.addWidget(QLabel(_("Intervalo para lembrar mais tarde:")))
+        remind_layout.addStretch()  # Empurra o widget para a direita
+        self.remind_widget = TimeIntervalWidget(self.current_config.get('interval-remind-later', 3600))
+        self.remind_widget.setMinimumWidth(200)  # Define largura mínima para alinhamento
+        remind_layout.addWidget(self.remind_widget)
+        behavior_layout.addLayout(remind_layout)
+
+        # After remind later show
+        after_remind_layout = QHBoxLayout()
+        after_remind_layout.addWidget(QLabel(_("Quando o tempo de espera terminar, mostrar:")))
+        after_remind_layout.addStretch()  # Empurra o widget para a direita
+        self.after_remind_combo = QComboBox()
+        # Adiciona itens com texto em português, mas armazena valores em inglês
+        self.after_remind_combo.addItem(_("janela"), "window")
+        self.after_remind_combo.addItem(_("notificação"), "notification")
+        current_value = self.current_config.get('after-remind-later-show', 'window').lower().strip()
+        # Encontra o índice baseado no valor em inglês
+        index = 0 if current_value == 'window' else 1
+        self.after_remind_combo.setCurrentIndex(index)
+        self.after_remind_combo.setMinimumWidth(200)  # Define largura mínima para alinhamento
+        after_remind_layout.addWidget(self.after_remind_combo)
+        behavior_layout.addLayout(after_remind_layout)
+
+        # Open window on notification click
+        open_window_layout = QHBoxLayout()
+        self.open_window_checkbox = QCheckBox(_("Abrir a janela principal ao clicar na notificação"))
+        open_window_value = self.current_config.get('open-window-on-notification-click', True)
+        # Garante que seja boolean
+        if isinstance(open_window_value, bool):
+            self.open_window_checkbox.setChecked(open_window_value)
+        else:
+            self.open_window_checkbox.setChecked(str(open_window_value).lower() in ['true', '1', 'yes', 'on'])
+        open_window_layout.addWidget(self.open_window_checkbox)
+        behavior_layout.addLayout(open_window_layout)
+        
+        behavior_group.setLayout(behavior_layout)
+        scroll_layout.addWidget(behavior_group)
+        
+        # Grupo: Arquivos
+        files_group = QGroupBox(_("Arquivos"))
+        files_group.setFlat(True)
+        files_layout = QVBoxLayout()
+        
+        # Update checker files directory
+        dir_layout = QHBoxLayout()
+        dir_layout.addWidget(QLabel(_("Diretório de arquivos:")))
+        self.dir_edit = QLineEdit()
+        self.dir_edit.setText(self.current_config.get('update-checker-files-directory', '/var/log/update-checker'))
+        dir_layout.addWidget(self.dir_edit)
+        files_layout.addLayout(dir_layout)
+        
+        # XML file path (com checkbox)
+        xml_check_layout = QHBoxLayout()
+        self.xml_checkbox = QCheckBox(_("Arquivo de atualizações personalizado"))
+        xml_check_layout.addWidget(self.xml_checkbox)
+        xml_check_layout.addStretch()
+        files_layout.addLayout(xml_check_layout)
+        
+        xml_layout = QHBoxLayout()
+        xml_layout.addWidget(QLabel(_("Caminho do arquivo XML:")))
+        self.xml_edit = QLineEdit()
+        xml_custom = self.current_config.get('xml-file-path', '')
+        default_xml = os.path.join(self.current_config.get('update-checker-files-directory', '/var/log/update-checker'), 'updates.xml')
+        if xml_custom and xml_custom != default_xml:
+            self.xml_checkbox.setChecked(True)
+            self.xml_edit.setText(xml_custom)
+            self.xml_edit.setEnabled(True)
+        else:
+            self.xml_edit.setText(default_xml)
+            self.xml_edit.setEnabled(False)
+        self.xml_checkbox.toggled.connect(self.xml_edit.setEnabled)
+        xml_layout.addWidget(self.xml_edit)
+        browse_xml_btn = QPushButton(_("Procurar..."))
+        browse_xml_btn.clicked.connect(self.browse_xml_file)
+        xml_layout.addWidget(browse_xml_btn)
+        files_layout.addLayout(xml_layout)
+        
+        # Run log file path (com checkbox)
+        log_check_layout = QHBoxLayout()
+        self.log_checkbox = QCheckBox(_("Arquivo de log personalizado"))
+        log_check_layout.addWidget(self.log_checkbox)
+        log_check_layout.addStretch()
+        files_layout.addLayout(log_check_layout)
+        
+        log_layout = QHBoxLayout()
+        log_layout.addWidget(QLabel(_("Caminho do arquivo de log:")))
+        self.log_edit = QLineEdit()
+        log_custom = self.current_config.get('run-log-file-path', '')
+        default_log = os.path.join(self.current_config.get('update-checker-files-directory', '/var/log/update-checker'), 'run.log')
+        if log_custom and log_custom != default_log:
+            self.log_checkbox.setChecked(True)
+            self.log_edit.setText(log_custom)
+            self.log_edit.setEnabled(True)
+        else:
+            self.log_edit.setText(default_log)
+            self.log_edit.setEnabled(False)
+        self.log_checkbox.toggled.connect(self.log_edit.setEnabled)
+        log_layout.addWidget(self.log_edit)
+        browse_log_btn = QPushButton(_("Procurar..."))
+        browse_log_btn.clicked.connect(self.browse_log_file)
+        log_layout.addWidget(browse_log_btn)
+        files_layout.addLayout(log_layout)
+        
+        files_group.setLayout(files_layout)
+        scroll_layout.addWidget(files_group)
+        
+        # Grupo: Comando de atualização
+        command_group = QGroupBox(_("Comando de Atualização"))
+        command_group.setFlat(True)
+        command_layout = QVBoxLayout()
+        
+        cmd_layout = QHBoxLayout()
+        # cmd_layout.addWidget(QLabel("Comando:"))
+        self.cmd_edit = QLineEdit()
+        self.cmd_edit.setText(self.current_config.get('update-command', '/usr/bin/update-system'))
+        cmd_layout.addWidget(self.cmd_edit)
+        command_layout.addLayout(cmd_layout)
+        
+        command_group.setLayout(command_layout)
+        scroll_layout.addWidget(command_group)
+        
+        self.scroll_widget.setLayout(scroll_layout)
+        self.scroll.setWidget(self.scroll_widget)
+        main_layout.addWidget(self.scroll)
+        
+        # Adiciona espaçamento de 15 pontos entre o conteúdo e os botões
+        main_layout.addSpacing(15)
+        
+        # Botões
+        buttons_layout = QHBoxLayout()
+        buttons_layout.setContentsMargins(0, 0, 0, 0)
+        restore_btn = QPushButton(_("Restaurar padrões"))
+        restore_btn.clicked.connect(self.restore_defaults)
+        buttons_layout.addWidget(restore_btn)
+        buttons_layout.addStretch()
+        save_btn = QPushButton(_("Salvar"))
+        save_btn.clicked.connect(self.save_config)
+        cancel_btn = QPushButton(_("Cancelar"))
+        cancel_btn.clicked.connect(self.reject)
+        buttons_layout.addWidget(save_btn)
+        buttons_layout.addWidget(cancel_btn)
+        main_layout.addLayout(buttons_layout)
+        
+        # Ajusta o tamanho da janela após o layout ser processado
+        # Usa um timer para garantir que o layout foi calculado
+        QTimer.singleShot(0, self._adjust_dialog_size)
+    
+    def _adjust_dialog_size(self):
+        """Ajusta o tamanho do diálogo para caber todo o conteúdo."""
+        if not hasattr(self, 'scroll_widget') or not self.scroll_widget:
+            return
+        
+        # Força o cálculo do tamanho do conteúdo
+        self.scroll_widget.adjustSize()
+        content_height = self.scroll_widget.sizeHint().height()
+        # Largura mínima reduzida para se ajustar melhor ao conteúdo
+        content_width = max(self.scroll_widget.sizeHint().width(), 450)
+        
+        # Estima a altura dos botões (altura padrão de um botão + espaçamento)
+        # Um botão padrão tem cerca de 30-35px de altura
+        buttons_height = 35
+        
+        # Ajusta a janela para mostrar todo o conteúdo sem rolagem
+        # Altura = conteúdo + espaçamento (15) + botões + margens (10 topo + 10 inferior = 20)
+        self.scroll.setMinimumHeight(content_height)
+        self.scroll.setMaximumHeight(content_height)
+        dialog_height = content_height + 15 + buttons_height + 20  # +15 para espaçamento entre conteúdo e botões, +20 para margens superior e inferior
+        
+        # Largura = conteúdo + margens laterais (15 + 15 = 30)
+        dialog_width = content_width + 30
+        
+        # Define o tamanho do diálogo
+        self.setMinimumSize(dialog_width, dialog_height)
+        self.resize(dialog_width, dialog_height)
+    
+    def browse_xml_file(self):
+        """Abre diálogo para selecionar arquivo XML."""
+        file_path, _ = QFileDialog.getOpenFileName(
+            self, _("Selecionar arquivo XML"), "", _("XML Files (*.xml);;All Files (*)")
+        )
+        if file_path:
+            self.xml_edit.setText(file_path)
+    
+    def browse_log_file(self):
+        """Abre diálogo para selecionar arquivo de log."""
+        file_path, _ = QFileDialog.getSaveFileName(
+            self, _("Selecionar arquivo de log"), "", _("Log Files (*.log);;All Files (*)")
+        )
+        if file_path:
+            self.log_edit.setText(file_path)
+    
+    def restore_defaults(self):
+        """Restaura todos os valores para os padrões."""
+        # Valores padrão
+        default_refresh_interval = 60  # 1 minuto
+        default_interval_after_first_successful_run = 60 * 60 * 24 * 7  # 7 dias
+        default_interval_remind_later = 60 * 60  # 1 hora
+        default_after_remind_later_show = 'window'
+        default_open_window_on_notification_click = True
+        default_update_checker_files_directory = '/var/log/update-checker'
+        default_update_command = '/usr/bin/update-system'
+
+        # Restaura os widgets de intervalo
+        self.refresh_widget.set_seconds(default_refresh_interval)
+        self.first_run_widget.set_seconds(default_interval_after_first_successful_run)
+        self.remind_widget.set_seconds(default_interval_remind_later)
+
+        # Restaura o combo box
+        index = 0 if default_after_remind_later_show == 'window' else 1
+        self.after_remind_combo.setCurrentIndex(index)
+
+        # Restaura o checkbox
+        self.open_window_checkbox.setChecked(default_open_window_on_notification_click)
+        
+        # Restaura o diretório de arquivos
+        self.dir_edit.setText(default_update_checker_files_directory)
+        
+        # Restaura os checkboxes e campos de arquivo
+        self.xml_checkbox.setChecked(False)
+        default_xml = os.path.join(default_update_checker_files_directory, 'updates.xml')
+        self.xml_edit.setText(default_xml)
+        self.xml_edit.setEnabled(False)
+        
+        self.log_checkbox.setChecked(False)
+        default_log = os.path.join(default_update_checker_files_directory, 'run.log')
+        self.log_edit.setText(default_log)
+        self.log_edit.setEnabled(False)
+        
+        # Restaura o comando de atualização
+        self.cmd_edit.setText(default_update_command)
+    
+    def save_config(self):
+        """Salva as configurações."""
+        config_dict = {
+            'refresh-interval': self.refresh_widget.get_seconds(),
+            'interval-after-first-successful-run': self.first_run_widget.get_seconds(),
+            'interval-remind-later': self.remind_widget.get_seconds(),
+            'after-remind-later-show': self.after_remind_combo.currentData(),  # Usa o valor em inglês armazenado
+            'open-window-on-notification-click': self.open_window_checkbox.isChecked(),
+            'update-checker-files-directory': self.dir_edit.text().strip(),
+            'update-command': self.cmd_edit.text().strip(),
+            'language': self.language_combo.currentData()  # Salva o código do idioma selecionado
+        }
+        
+        # Adiciona xml-file-path apenas se o checkbox estiver marcado
+        if self.xml_checkbox.isChecked():
+            config_dict['xml-file-path'] = self.xml_edit.text().strip()
+        
+        # Adiciona run-log-file-path apenas se o checkbox estiver marcado
+        if self.log_checkbox.isChecked():
+            config_dict['run-log-file-path'] = self.log_edit.text().strip()
+        
+        try:
+            save_config(config_dict)
+            # Recarrega as configurações globais
+            global _CONFIG, CHECK_INTERVAL, INTERVAL_AFTER_FIRST_SUCCESSFUL_RUN
+            global INTERVAL_AFTER_ZYPPER_DIST_UPGRADE, INTERVAL_AFTER_ZYPPER_DIST_UPGRADE_CHECK
+            global INTERVAL_REMIND_LATER, AFTER_REMIND_LATER_SHOW
+            global OPEN_WINDOW_ON_NOTIFICATION_CLICK
+            global DEFAULT_UPDATE_CHECKER_FILES_DIRECTORY, DEFAULT_XML_FILE_PATH
+            global DEFAULT_RUN_LOG_FILE_PATH, UPDATE_COMMAND
+            
+            _CONFIG = load_config()
+            CHECK_INTERVAL = _CONFIG['refresh-interval']
+            INTERVAL_AFTER_FIRST_SUCCESSFUL_RUN = _CONFIG['interval-after-first-successful-run']
+            INTERVAL_AFTER_ZYPPER_DIST_UPGRADE = _CONFIG['interval-after-zypper-dist-upgrade']
+            INTERVAL_AFTER_ZYPPER_DIST_UPGRADE_CHECK = _CONFIG['interval-after-zypper-dist-upgrade-check']
+            INTERVAL_REMIND_LATER = _CONFIG['interval-remind-later']
+            AFTER_REMIND_LATER_SHOW = _CONFIG['after-remind-later-show']
+            OPEN_WINDOW_ON_NOTIFICATION_CLICK = _CONFIG['open-window-on-notification-click']
+            DEFAULT_UPDATE_CHECKER_FILES_DIRECTORY = _CONFIG['update-checker-files-directory']
+            DEFAULT_XML_FILE_PATH = _CONFIG['xml-file-path']
+            DEFAULT_RUN_LOG_FILE_PATH = _CONFIG['run-log-file-path']
+            UPDATE_COMMAND = _CONFIG['update-command']
+            
+            # Atualiza o intervalo do timer e o caminho do XML se necessário
+            # Usa parent_manager se disponível, senão tenta parent()
+            manager = self.parent_manager if hasattr(self, 'parent_manager') and self.parent_manager else (self.parent() if self.parent() else None)
+            if manager and hasattr(manager, '_timer'):
+                manager.poll_interval_ms = int(max(1, CHECK_INTERVAL) * 1_000)
+                manager._timer.setInterval(manager.poll_interval_ms)
+            
+            # Atualiza o caminho do XML na instância do UpdateManager
+            if manager and hasattr(manager, 'xml_path'):
+                manager.xml_path = DEFAULT_XML_FILE_PATH
+            
+            # Recarrega traduções se o idioma mudou
+            new_language = _CONFIG.get('language', 'auto')
+            if manager and hasattr(manager, 'reload_translations'):
+                manager.reload_translations(new_language)
+            
+            self.accept()
+        except Exception as e:
+            from PyQt6.QtWidgets import QMessageBox
+            QMessageBox.critical(self, _("Erro"), _("Erro ao salvar configurações: {}").format(e))
+
+class UpdateViewerDBusService(dbus.service.Object):
+    """
+    Serviço D-Bus que permite que aplicações externas forcem a verificação
+    de atualizações de forma imediata.
+    """
+    def __init__(self, update_manager, bus_name, object_path):
+        self.update_manager = update_manager
+        dbus.service.Object.__init__(self, bus_name, object_path)
+
+    @dbus.service.method(UPDATE_SERVICE_IFACE, in_signature='', out_signature='b')
+    def poll_updates(self):
+        """
+        Força a verificação imediata do arquivo updates.xml.
+        Retorna True se a verificação foi iniciada com sucesso.
+        """
+        try:
+            # Chama poll_updates na thread principal do Qt
+            QTimer.singleShot(0, self.update_manager.poll_updates)
+            return True
+        except Exception as e:
+            print(f"[update-viewer] Erro ao forçar verificação via D-Bus: {e}")
+            return False
+
+class UpdateManager(QWidget):
+    def __init__(self, xml_output=None, repo_xml_output=None, xml_path=DEFAULT_XML_FILE_PATH,
+                 poll_seconds=CHECK_INTERVAL):
+        super().__init__()
+        self.setWindowTitle(_("Atualizações Disponíveis"))
+        self.setGeometry(100, 100, 700, 500)
+        self.package_info = {}
+        self.repo_urls = {}
+        self.total_download_size = 0
+        self.need_reboot = False
+        self.xml_output = xml_output
+        self.repo_xml_output = repo_xml_output
+        self.stack = None
+        self.info_label = None
+        self.update_count = 0
+        self.error_count = 0
+        self.first_run = None
+        self.last_run = None
+        self.first_successful_run = None
+        self.last_successful_run = None
+        self.time_elapsed_str = None
+        self.interval_after_first_run_str = self.convert_from_seconds(INTERVAL_AFTER_FIRST_SUCCESSFUL_RUN)
+
+        # Verificando a presença do arquivo XML
+        self.xml_path = xml_path
+        self.poll_interval_ms = int(max(1, poll_seconds) * 1_000)
+
+        # Estado da notificação DBus
+        self._dbus_loop = None
+        self._dbus_loop_thread = None
+        self._bus = None
+        self._notify_iface = None
+        self._notification_id = None  # notification id
+        self._last_notification_time = None  # timestamp da última notificação enviada
+        self._dbus_service = None  # serviço D-Bus para controle externo
+        self._previous_update_count = 0  # rastreia o número anterior de atualizações para detectar transições
+        self._notification_action_taken = False  # flag para rastrear se uma ação foi executada via botões
+
+        # Tray Icon
+        self.tray_icon = QSystemTrayIcon(self)
+        tray_icon_theme = QIcon.fromTheme("system-software-update")
+        if tray_icon_theme.isNull():
+            tray_icon_theme = self.style().standardIcon(self.style().StandardPixmap.SP_ComputerIcon)
+        self.tray_icon.setIcon(tray_icon_theme)
+        self.tray_icon.setToolTip(_("Sem atualizações disponíveis."))
+
+        # Menu da bandeja
+        self.tray_menu = QMenu()
+        self.install_action = QAction(_("Instalar atualizações"), self)
+        self.install_action.setEnabled(False)
+        self.show_action = QAction(_("Ver atualizações"), self)
+        self.show_action.setEnabled(False)
+        config_action = QAction(_("Preferências"), self)
+        about_action = QAction(_("Sobre..."), self)
+
+        self.tray_menu.addAction(self.install_action)
+        self.tray_menu.addAction(self.show_action)
+        self.tray_menu.addSeparator()
+        self.tray_menu.addAction(config_action)
+        self.tray_menu.addAction(about_action)
+        self.tray_icon.setContextMenu(self.tray_menu)
+
+        # Conecta as ações do tray
+        self.show_action.triggered.connect(self.restore_from_tray)
+        self.install_action.triggered.connect(self.install_updates_from_tray)
+        config_action.triggered.connect(self.show_config_dialog)
+        about_action.triggered.connect(self.show_about_dialog)
+        self.tray_icon.activated.connect(self.on_tray_activated)
+
+        self.tray_icon.show()
+        self.initUI()
+
+        # Verificação periódica por atualizações
+        self._timer = QTimer(self)
+        self._timer.setInterval(self.poll_interval_ms)
+        self._timer.timeout.connect(self.poll_updates)
+        self._timer.start()
+
+        # Inicializa o serviço D-Bus para permitir controle externo
+        self._init_dbus_service()
+
+        # Aguarda um pequeno tempo antes de forçar a exibição da janela (para garantir que a UI esteja pronta)
+        self._first_run_timer = None
+        if os.path.exists(DEFAULT_RUN_LOG_FILE_PATH):
+            try:
+                with open(DEFAULT_RUN_LOG_FILE_PATH, 'r') as f:
+                    # Carregando as informações do arquivo de log
+                    # Error count
+                    # First run
+                    # Last run
+                    # First successful run
+                    # Last successful run
+                    for line in f:
+                        if line.startswith("Error count:"):
+                            error_count_str = line.split("Error count:")[1].strip()
+                            self.error_count = int(error_count_str)
+                        elif line.startswith("First run:"):
+                            first_run_str = line.split("First run:")[1].strip()
+                            self.first_run = datetime.strptime(first_run_str, "%Y-%m-%d %H:%M:%S")
+                        elif line.startswith("Last run:"):
+                            last_run_str = line.split("Last run:")[1].strip()
+                            self.last_run = datetime.strptime(last_run_str, "%Y-%m-%d %H:%M:%S")
+                        elif line.startswith("First successful run:"):
+                            first_successful_run_str = line.split("First successful run:")[1].strip()
+                            self.first_successful_run = datetime.strptime(first_successful_run_str, "%Y-%m-%d %H:%M:%S")
+                        elif line.startswith("Last successful run:"):
+                            last_successful_run_str = line.split("Last successful run:")[1].strip()
+                            self.last_successful_run = datetime.strptime(last_successful_run_str, "%Y-%m-%d %H:%M:%S")
+            except Exception as e:
+                print(f"Erro ao ler {DEFAULT_RUN_LOG_FILE_PATH}: {e}")
+                
+            if self.error_count > 0:
+                self._set_no_updates_state()
+                return
+
+            if self.first_successful_run and self.last_successful_run:
+                elapsed = (self.last_successful_run - self.first_successful_run).total_seconds()
+                self.time_elapsed_str = self.convert_from_seconds(int(elapsed))
+                
+                # Verifica se o zypper dist-upgrade está rodando
+                delay_due_to_zypper = 0
+                if self.is_zypper_dist_upgrade_running():
+                    delay_due_to_zypper = INTERVAL_AFTER_ZYPPER_DIST_UPGRADE
+                
+                if elapsed + delay_due_to_zypper > INTERVAL_AFTER_FIRST_SUCCESSFUL_RUN:
+                    if delay_due_to_zypper > 0:
+                        # Se o zypper está rodando, aguarda e depois verifica o arquivo XML
+                        print(_("Aguardando término do processo 'zypper dist-upgrade'. A janela será exibida em {}.").format(self.convert_from_seconds(delay_due_to_zypper)))
+                        self._first_run_timer = QTimer(self)
+                        self._first_run_timer.setSingleShot(True)
+                        self._first_run_timer.timeout.connect(self.check_and_restore_from_tray)
+                        self._first_run_timer.start(int(delay_due_to_zypper * 1000))
+                    else:
+                        # Tempo normal passou, mostra imediatamente (mas verifica se o arquivo existe)
+                        print(_("Forçando exibição imediata da janela pois passaram-se {} desde a primeira execução, há mais de {} atrás.").format(self.convert_from_seconds(int(elapsed)), self.interval_after_first_run_str))
+                        QTimer.singleShot(0, self.check_and_restore_from_tray)
+                else:
+                    # Calcula o tempo restante considerando o delay do zypper
+                    remaining = INTERVAL_AFTER_FIRST_SUCCESSFUL_RUN - elapsed
+                    total_wait = remaining + delay_due_to_zypper
+                    
+                    if delay_due_to_zypper > 0:
+                        print(_("Aguardando término do processo 'zypper dist-upgrade' e mais {}. A janela será exibida em {}.").format(self.convert_from_seconds(int(remaining)), self.convert_from_seconds(int(total_wait))))
+                    else:
+                        print(_("Atualizações disponíveis. A janela será exibida automaticamente em {} se o usuário não interagir.").format(self.convert_from_seconds(int(remaining))))
+                    
+                    self._first_run_timer = QTimer(self)
+                    self._first_run_timer.setSingleShot(True)
+                    self._first_run_timer.timeout.connect(self.check_and_restore_from_tray)
+                    self._first_run_timer.start(int(total_wait * 1000))
+
+    def is_zypper_dist_upgrade_running(self):
+        """
+        Verifica se o processo 'zypper dist-upgrade' está em execução.
+        Retorna True se estiver rodando, False caso contrário.
+        """
+        try:
+            # Verifica processos em execução com 'ps' e 'grep'
+            result = subprocess.run(
+                ["pgrep", "-af", "zypper.*dist-upgrade"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE
+            )
+            # Se encontrou algum processo (exit code 0), retorna True
+            return result.returncode == 0
+        except Exception:
+            # Em caso de erro, assume que não está rodando
+            return False
+
+    def check_and_restore_from_tray(self):
+        """
+        Verifica se o arquivo XML de atualizações existe e se o zypper dist-upgrade
+        está rodando antes de exibir a janela. Se o processo estiver rodando, agenda
+        uma nova verificação após um intervalo.
+        """
+        # Verifica se o zypper dist-upgrade está rodando
+        if self.is_zypper_dist_upgrade_running():
+            print(_("Processo 'zypper dist-upgrade' ainda está em execução. Verificando novamente em {}.").format(self.convert_from_seconds(INTERVAL_AFTER_ZYPPER_DIST_UPGRADE_CHECK)))
+            # Agenda uma nova verificação após o intervalo definido
+            QTimer.singleShot(INTERVAL_AFTER_ZYPPER_DIST_UPGRADE_CHECK * 1000, self.check_and_restore_from_tray)
+            return
+        
+        # Verifica se o arquivo XML existe
+        if not os.path.exists(DEFAULT_XML_FILE_PATH):
+            print(_("Arquivo {} não encontrado. Atualizando status para 'sem atualizações'.").format(DEFAULT_XML_FILE_PATH))
+            self._set_no_updates_state()
+            return
+        
+        # Se o arquivo existe e o zypper não está rodando, verifica a configuração
+        # e decide entre mostrar a janela ou a notificação
+        after_remind_show = AFTER_REMIND_LATER_SHOW.lower().strip() if isinstance(AFTER_REMIND_LATER_SHOW, str) else 'window'
+        if after_remind_show == 'notification':
+            # Mostra a notificação
+            if self.update_count > 0:
+                self.send_update_notification_dbus(force_notification=True)
+        else:
+            # Mostra a janela (comportamento padrão)
+            self.restore_from_tray()
+
+    def convert_from_seconds(self, seconds):
+        # Converte de segundos para uma string legível
+        # Ex.: 3600 -> "1 hora", 604800 -> "7 dias"
+        if seconds < 60:
+            return f"{seconds} segundos"
+        elif seconds < 3600:
+            minutes = seconds // 60
+            return f"{minutes} minuto{'s' if minutes > 1 else ''}"
+        elif seconds < 86400:
+            hours = seconds // 3600
+            return f"{hours} hora{'s' if hours > 1 else ''}"
+        else:
+            days = seconds // 86400
+            return f"{days} dia{'s' if days > 1 else ''}"
+
+    def reload_translations(self, lang=None):
+        """
+        Recarrega as traduções com o novo idioma e atualiza a UI.
+        
+        Args:
+            lang: Código de idioma ('auto', 'en', 'pt_BR', 'es', 'de', 'ja') ou None para usar da config
+        """
+        global _
+        
+        # Se lang não foi especificado, usa da configuração
+        if lang is None:
+            lang = _CONFIG.get('language', 'auto')
+        
+        # Recarrega traduções
+        _ = init_i18n(lang)
+        
+        # Atualiza título da janela
+        self.setWindowTitle(_("Atualizações Disponíveis"))
+        
+        # Atualiza tooltip do tray
+        if self.update_count > 0:
+            self.tray_icon.setToolTip(_("{} atualizações disponíveis.").format(self.update_count))
+        else:
+            self.tray_icon.setToolTip(_("Sem atualizações disponíveis."))
+        
+        # Atualiza ações do menu do tray
+        self.install_action.setText(_("Instalar atualizações"))
+        self.show_action.setText(_("Ver atualizações"))
+        
+        # Reconstrói a UI se já foi inicializada
+        if self.stack is not None:
+            # Reconstrói a UI completamente
+            self.initUI()
+        
+        # Atualiza o diálogo de configurações se estiver aberto
+        if hasattr(self, '_config_dialog') and self._config_dialog is not None:
+            try:
+                if self._config_dialog.isVisible():
+                    # Fecha e recria o diálogo para atualizar os textos
+                    self._config_dialog.close()
+                    self.show_config_dialog()
+            except RuntimeError:
+                pass
+
+    def restore_from_tray(self):
+        # Se a janela já estiver visível, apenas a ativa sem criar uma nova instância
+        if self.isVisible():
+            self.activateWindow()
+            self.raise_()
+        else:
+            self.showNormal()
+            self.activateWindow()
+            self.raise_()
+
+    def remind_later(self):
+        """
+        Agenda a exibição da janela após o intervalo INTERVAL_REMIND_LATER.
+        """
+        # Exibe mensagem no console
+        print(_("Lembrando mais tarde. A janela será exibida automaticamente em {}.").format(self.convert_from_seconds(INTERVAL_REMIND_LATER)))
+        
+        # Fecha a janela
+        self.hide()
+        
+        # Para o timer anterior se estiver rodando
+        if hasattr(self, '_remind_timer') and self._remind_timer is not None:
+            self._remind_timer.stop()
+            try:
+                self._remind_timer.timeout.disconnect()
+            except TypeError:
+                # Se não houver conexões, ignora o erro
+                pass
+        
+        # Cria o timer se não existir
+        if not hasattr(self, '_remind_timer') or self._remind_timer is None:
+            self._remind_timer = QTimer(self)
+            self._remind_timer.setSingleShot(True)
+        
+        # Conecta o sinal e inicia o timer
+        self._remind_timer.timeout.connect(self.check_and_restore_from_tray)
+        self._remind_timer.start(INTERVAL_REMIND_LATER * 1000)
+
+    def closeEvent(self, event):
+        """
+        Intercepta o evento de fechar a janela para agendar a exibição futura,
+        mas somente se já passou INTERVAL_AFTER_FIRST_SUCCESSFUL_RUN desde a primeira execução bem-sucedida.
+        """
+        # Verifica se já passou o intervalo necessário
+        should_schedule = False
+        if self.first_successful_run:
+            elapsed = (datetime.now() - self.first_successful_run).total_seconds()
+            if elapsed >= INTERVAL_AFTER_FIRST_SUCCESSFUL_RUN:
+                should_schedule = True
+        
+        if should_schedule:
+            print(_("Janela fechada. Será exibida novamente em {}.").format(self.convert_from_seconds(INTERVAL_REMIND_LATER)))
+            # Para o timer anterior se estiver rodando
+            if hasattr(self, '_remind_timer') and self._remind_timer is not None:
+                self._remind_timer.stop()
+                try:
+                    self._remind_timer.timeout.disconnect()
+                except TypeError:
+                    # Se não houver conexões, ignora o erro
+                    pass
+            
+            # Cria o timer se não existir
+            if not hasattr(self, '_remind_timer') or self._remind_timer is None:
+                self._remind_timer = QTimer(self)
+                self._remind_timer.setSingleShot(True)
+            
+            # Conecta o sinal e inicia o timer
+            self._remind_timer.timeout.connect(self.check_and_restore_from_tray)
+            self._remind_timer.start(INTERVAL_REMIND_LATER * 1000)
+        # else:
+        #     remaining = INTERVAL_AFTER_FIRST_SUCCESSFUL_RUN - elapsed
+        #     print(f"A janela será exibida automaticamente em {self.convert_from_seconds(int(remaining))} se o usuário não interagir.")
+        
+        # Aceita o evento de fechar (fecha a janela)
+        event.accept()
+
+    def on_tray_activated(self, reason):
+        # Exibe as opções "Ver atualizações" e "Sobre" ao clicar no ícone da bandeja
+        if reason == QSystemTrayIcon.ActivationReason.Trigger:
+            # Primeiro verifica se a janela principal está visível - se estiver, fecha ela
+            if self.isVisible():
+                self.hide()
+                return
+            
+            if self.update_count > 0:
+                # Mostra a janela de atualizações
+                self.show()
+                self.raise_()
+                self.activateWindow()
+            else:
+                # Se a janela de "sem atualizações" já estiver aberta, fecha ela
+                if hasattr(self, '_all_good_dialog') and self._all_good_dialog is not None:
+                    try:
+                        if self._all_good_dialog.isVisible():
+                            self._all_good_dialog.close()
+                            return
+                    except RuntimeError:
+                        self._all_good_dialog = None
+                self.show_all_good_window()
+
+    def show_all_good_window(self):
+        # Verifica se já existe uma janela de diálogo aberta e válida
+        if hasattr(self, '_all_good_dialog') and self._all_good_dialog is not None:
+            try:
+                # Tenta verificar se o diálogo ainda é válido e está visível
+                if self._all_good_dialog.isVisible():
+                    self._all_good_dialog.activateWindow()
+                    self._all_good_dialog.raise_()
+                    return
+            except RuntimeError:
+                # Se o objeto foi destruído, limpa a referência e cria um novo
+                self._all_good_dialog = None
+        
+        dlg = QDialog(self)
+        dlg.setWindowTitle(_("Sem atualizações"))
+        dlg.setModal(True)
+        # Armazena referência ao diálogo para evitar múltiplas instâncias
+        self._all_good_dialog = dlg
+
+        # Mesmas dimensões da janela principal (tamanho fixo)
+        dlg.setFixedSize(700, 500)
+
+        # Layouts
+        from PyQt6.QtWidgets import QVBoxLayout, QHBoxLayout, QLabel, QPushButton
+        layout = QVBoxLayout(dlg)
+
+        # Layout superior com botão de configurações à direita
+        top_hbox = QHBoxLayout()
+        
+        # Botão de configurações (engrenagem) no topo superior direito
+        config_btn = QPushButton()
+        config_icon = QIcon.fromTheme("settings")
+        if config_icon.isNull():
+            # Tenta outros ícones de configurações
+            config_icon = QIcon.fromTheme("preferences-system")
+            if config_icon.isNull():
+                config_icon = QIcon.fromTheme("system-settings")
+                if config_icon.isNull():
+                    config_icon = QIcon.fromTheme("configure")
+                    if config_icon.isNull():
+                        config_icon = self.style().standardIcon(self.style().StandardPixmap.SP_FileDialogDetailedView)
+        # Define tamanho maior para o ícone
+        config_btn.setIconSize(QSize(25, 25))  # Tamanho do ícone dentro do botão
+        config_btn.setIcon(config_icon)
+        config_btn.setToolTip(_("Preferências"))
+        # Remove tamanho fixo para permitir que o botão se ajuste ao texto e ícone
+        config_btn.setFlat(True)  # Botão sem borda para melhor aparência
+        config_btn.clicked.connect(self.show_config_dialog)
+        
+        top_hbox.addStretch()
+        top_hbox.addWidget(config_btn)
+        layout.addLayout(top_hbox)
+
+        # Linha principal: ícone (check) + texto
+        hbox = QHBoxLayout()
+
+        # Ícone de "check"
+        icon_label = QLabel()
+        icon = QIcon.fromTheme("emblem-ok")
+        if icon.isNull():
+            # Fallback para um ícone padrão com "apply/check" do sistema
+            icon = self.style().standardIcon(self.style().StandardPixmap.SP_DialogApplyButton)
+        icon_label.setPixmap(icon.pixmap(96, 96))
+
+        # Texto
+        text_label = QLabel(f"<b>{_('Tudo certo! Sem atualizações disponíveis!')}</b>")
+        font = QFont()
+        font.setPointSize(18)
+        text_label.setFont(font)
+        text_label.setWordWrap(True)
+
+        hbox.addWidget(icon_label, 0, Qt.AlignmentFlag.AlignTop)
+        hbox.addWidget(text_label, 1, Qt.AlignmentFlag.AlignVCenter)
+
+        # Botão OK alinhado à direita
+        buttons = QHBoxLayout()
+        ok_btn = QPushButton(_("OK"))
+        ok_btn.clicked.connect(dlg.accept)
+        buttons.addStretch(1)
+        buttons.addWidget(ok_btn)
+
+        # Monta a janela
+        layout.addStretch(1)
+        layout.addLayout(hbox)
+        layout.addStretch(2)
+        layout.addLayout(buttons)
+
+        dlg.exec()
+        # Limpa a referência quando o diálogo for fechado
+        if hasattr(self, '_all_good_dialog'):
+            self._all_good_dialog = None
+
+    def install_updates_from_tray(self):
+        if self.stack is None:
+            self.initUI()
+        if self.stack is None:
+            # algo impediu a UI de inicializar (por ex. XML inválido)
+            return
+        # Se a janela já estiver visível, apenas a ativa sem criar uma nova instância
+        if self.isVisible():
+            self.activateWindow()
+            self.raise_()
+        else:
+            self.show()
+            self.raise_()
+            self.activateWindow()
+        self.start_update_and_close()
+
+    def start_update_and_close(self):
+        # inicia o atualizador destacado (independente da GUI)
+        # Divide o comando em programa e argumentos usando shlex
+        cmd_parts = shlex.split(UPDATE_COMMAND)
+        if cmd_parts:
+            QProcess.startDetached(cmd_parts[0], cmd_parts[1:])
+        else:
+            # Fallback se o comando estiver vazio
+            QProcess.startDetached("update-system")
+
+        # tentativa de notificação (com parâmetros nomeados p/ evitar o TypeError)
+        try:
+            self.tray_icon.showMessage(
+                title=_("Atualizando o sistema"),
+                msg=_("As atualizações estão sendo instaladas em segundo plano."),
+                icon=QSystemTrayIcon.MessageIcon.Information,
+                msecs=5000,
+            )
+        except TypeError:
+            pass
+
+        # fecha a janela do visualizador, mantendo o tray ativo
+        self.close()
+
+    # ============ Rotina de verificação de atualizações ============
+    def poll_updates(self):
+        print(_("Verificando atualizações..."))
+        """
+        Verifica se o arquivo XML existe; se existir, habilita as opções de atualização.
+        Se não existir, considera 'sem atualizações'.
+        """
+        updates_xml = None
+        if self.xml_path and os.path.exists(self.xml_path):
+            try:
+                with open(self.xml_path, "r", encoding="utf-8") as f:
+                    updates_xml = f.read()
+            except Exception:
+                updates_xml = None
+
+        # Só atualiza se o XML mudou
+        if updates_xml != self.xml_output:
+            self.xml_output = updates_xml
+            self.refresh_ui_state()
+
+    def refresh_ui_state(self):
+        """
+        Recalcula self.update_count, habilita/desabilita ações e ajusta ícone/tooltip.
+        Reconstrói/atualiza a UI quando aplicável.
+        """
+        # Reset básico
+        self.package_info = {'to-upgrade': [], 'to-install': [], 'to-remove': [], 'to-change-arch': []}
+        self.total_download_size = 0
+        self.need_reboot = False
+        previous_update_count = self.update_count  # Salva o estado anterior antes de resetar
+        self.update_count = 0
+
+        # Verifica o Error count no arquivo de log
+        error_count = 0
+        if os.path.exists(DEFAULT_RUN_LOG_FILE_PATH):
+            try:
+                with open(DEFAULT_RUN_LOG_FILE_PATH, 'r') as f:
+                    for line in f:
+                        if line.startswith("Error count:"):
+                            error_count = int(line.split("Error count:")[1].strip())
+                            break
+            except Exception:
+                pass
+
+        # Só processa atualizações se Error count for 0
+        if error_count > 0:
+            print(_("Erro ao verificar atualizações. {} erros encontrados. Não há atualizações disponíveis.").format(error_count))
+            self._set_no_updates_state()
+            self._previous_update_count = 0
+            return
+
+        if self.xml_output and self.repo_xml_output and self.fetch_updates() and self.fetch_repo_urls():
+            self.update_count = len(self.package_info['to-upgrade'])
+            if self.update_count > 0:
+                self.show_action.setEnabled(True)
+                self.install_action.setEnabled(True)
+                self.tray_icon.setToolTip(f"{self.update_count} atualizações disponíveis.")
+                self.tray_icon.setIcon(QIcon.fromTheme("software-update-available"))
+                
+                # Detecta se houve transição de "sem atualizações" para "com atualizações"
+                is_state_transition = (previous_update_count == 0 and self.update_count > 0)
+                
+                # Envia notificação DBus com botão "Instalar atualizações"
+                # Se for uma transição de estado, sempre envia notificação (ignora intervalo mínimo)
+                self.send_update_notification_dbus(force_notification=is_state_transition)
+                self._previous_update_count = self.update_count
+                
+                if self.stack is None:
+                    self.initUI()
+                else:
+                    # Atualiza a lista a partir dos novos dados
+                    self.populate_package_tree()
+                    # Atualiza o texto do contador de pacotes
+                    if hasattr(self, 'info_label') and self.info_label is not None:
+                        self.info_label.setText(_("Há {} pacotes que serão atualizados.").format(self.update_count))
+            else:
+                # XML válido, mas sem pacotes a atualizar
+                self._set_no_updates_state()
+                self._previous_update_count = 0
+        else:
+            # Sem XML (arquivo ausente/ilegível) => sem atualizações
+            self._set_no_updates_state()
+            self._previous_update_count = 0
+
+    def _set_no_updates_state(self):
+        self.show_action.setEnabled(False)
+        self.install_action.setEnabled(False)
+        self.tray_icon.setToolTip(_("Sem atualizações disponíveis."))
+        self.tray_icon.setIcon(QIcon.fromTheme("system-software-update"))
+
+    # ============ Interface do usuário ============
+
+    def initUI(self):
+        if not self.xml_output or not self.repo_xml_output:
+            return
+
+        self.stack = QStackedWidget(self)
+        self.package_list_screen = QWidget()
+        layout = QVBoxLayout()
+
+        # Verifica o Error count no arquivo de log
+        error_count = 0
+        if os.path.exists(DEFAULT_RUN_LOG_FILE_PATH):
+            try:
+                with open(DEFAULT_RUN_LOG_FILE_PATH, 'r') as f:
+                    for line in f:
+                        if line.startswith("Error count:"):
+                            error_count = int(line.split("Error count:")[1].strip())
+                            break
+            except Exception:
+                pass
+
+        # Só processa atualizações se Error count for 0
+        if error_count > 0:
+            print(_("Erro ao verificar atualizações. {} erros encontrados. Não há atualizações disponíveis.").format(error_count))
+            self._set_no_updates_state()
+            return
+
+        if not self.fetch_updates() or not self.fetch_repo_urls():
+            return
+
+        self.update_count = len(self.package_info['to-upgrade'])
+
+        if self.update_count > 0:
+            # Habilita UI e notificação
+            self.show_action.setEnabled(True)
+            self.install_action.setEnabled(True)
+            self.tray_icon.setToolTip(f"{self.update_count} atualizações disponíveis.")
+            self.tray_icon.setIcon(QIcon.fromTheme("software-update-available"))
+
+            # Detecta se houve transição de "sem atualizações" para "com atualizações"
+            is_state_transition = (self._previous_update_count == 0 and self.update_count > 0)
+            
+            # Envia notificação DBus com botão "Instalar atualizações"
+            # Se for uma transição de estado, sempre envia notificação (ignora intervalo mínimo)
+            self.send_update_notification_dbus(force_notification=is_state_transition)
+        else:
+            self.install_action.setEnabled(False)
+
+        # Layout superior com ícone/info à esquerda e botão de configurações à direita
+        top_hbox = QHBoxLayout()
+        
+        hbox = QHBoxLayout()
+        icon_label = QLabel()
+        update_icon = QIcon.fromTheme("system-software-update")
+        if not update_icon.isNull():
+            pixmap = update_icon.pixmap(32, 32)
+            icon_label.setPixmap(pixmap)
+
+        self.info_label = QLabel(_("Há {} pacotes que serão atualizados.").format(self.update_count))
+        font = QFont()
+        font.setPointSize(16)
+        font.setBold(True)
+        self.info_label.setFont(font)
+
+        hbox.addWidget(icon_label)
+        hbox.addWidget(self.info_label)
+        hbox.setAlignment(Qt.AlignmentFlag.AlignLeft)
+        
+        # Botão de configurações (engrenagem) no topo superior direito
+        config_btn = QPushButton()
+        config_icon = QIcon.fromTheme("settings")
+        if config_icon.isNull():
+            # Tenta outros ícones de configurações
+            config_icon = QIcon.fromTheme("preferences-system")
+            if config_icon.isNull():
+                config_icon = QIcon.fromTheme("system-settings")
+                if config_icon.isNull():
+                    config_icon = QIcon.fromTheme("configure")
+                    if config_icon.isNull():
+                        config_icon = self.style().standardIcon(self.style().StandardPixmap.SP_FileDialogDetailedView)
+        # Define tamanho maior para o ícone
+        config_btn.setIconSize(QSize(25, 25))  # Tamanho do ícone dentro do botão
+        config_btn.setIcon(config_icon)
+        config_btn.setToolTip(_("Preferências"))
+        # Remove tamanho fixo para permitir que o botão se ajuste ao texto e ícone
+        config_btn.setFlat(True)  # Botão sem borda para melhor aparência
+        config_btn.clicked.connect(self.show_config_dialog)
+        
+        top_hbox.addLayout(hbox)
+        top_hbox.addStretch()
+        top_hbox.addWidget(config_btn)
+        layout.addLayout(top_hbox)
+
+        self.search_box = QLineEdit()
+        self.search_box.setPlaceholderText(_("Pesquise por pacotes..."))
+        self.search_box.textChanged.connect(self.filter_package_list)
+        layout.addWidget(self.search_box)
+
+        self.package_tree = QTreeWidget()
+        self.package_tree.setHeaderHidden(True)
+        self.package_tree.itemClicked.connect(self.show_package_details)
+        self.populate_package_tree()
+        layout.addWidget(self.package_tree)
+
+        download_info_label = QLabel(_("Tamanho do download: {}").format(self.format_size(self.total_download_size)))
+        layout.addWidget(download_info_label)
+
+        # Adicionando o aviso de reinicialização acima dos botões
+        button_layout = QVBoxLayout()
+
+        if self.need_reboot:
+            reboot_hbox = QHBoxLayout()
+
+            reboot_icon_label = QLabel()
+            reboot_icon = QIcon.fromTheme("dialog-warning")
+            if not reboot_icon.isNull():
+                pixmap = reboot_icon.pixmap(32, 32)
+                reboot_icon_label.setPixmap(pixmap)
+
+            reboot_message = QLabel(_("É necessário reiniciar o sistema para que algumas alterações entrem em vigor."))
+            reboot_font = QFont()
+            reboot_font.setPointSize(12)
+            reboot_message.setFont(reboot_font)
+
+            reboot_hbox.addWidget(reboot_icon_label)
+            reboot_hbox.addWidget(reboot_message)
+            reboot_hbox.setAlignment(Qt.AlignmentFlag.AlignLeft)
+            button_layout.addLayout(reboot_hbox)
+
+        # Botões inferiores
+        button_row_layout = QHBoxLayout()
+
+        update_button = QPushButton(_("Atualizar agora"))
+        update_button.clicked.connect(self.start_update_and_close)
+        
+        # Aplica estilo destacado usando a cor de destaque do tema do sistema
+        palette = self.palette()
+        highlight_color = palette.color(QPalette.ColorRole.Highlight)
+        # Cria uma versão 9/10 mais escura da cor de destaque para o fundo
+        # darker(111) ≈ 90% da cor original (9/10 mais escuro)
+        darker_highlight = highlight_color.darker(240)
+        
+        update_button.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {darker_highlight.name()};
+                border: 1px solid {highlight_color.name()};
+                padding: 6px;
+                font-weight: bold;
+                border-radius: 4px;
+            }}
+            QPushButton:hover {{
+                background-color: {darker_highlight.name()};
+                border: 1px solid {highlight_color.lighter(120).name()};
+            }}
+            QPushButton:pressed {{
+                background-color: {darker_highlight.lighter(120).name()};
+                border: 1px solid {highlight_color.lighter(120).name()};
+            }}
+        """)
+
+        remind_later = QPushButton(_("Lembrar mais tarde"))
+        remind_later.clicked.connect(self.remind_later)
+
+        button_row_layout.addWidget(remind_later)
+        button_row_layout.addWidget(update_button)
+
+        button_layout.addLayout(button_row_layout)
+        layout.addLayout(button_layout)
+
+        self.package_list_screen.setLayout(layout)
+        self.stack.addWidget(self.package_list_screen)
+
+        main_layout = QVBoxLayout(self)
+        main_layout.addWidget(self.stack)
+        self.setLayout(main_layout)
+
+    # ============================ Lógica de atualização/parse ============================
+
+    def fetch_updates(self):
+        if not self.xml_output:
+            return False
+
+        try:
+            root = ET.fromstring(self.xml_output)
+            self.package_info = {'to-upgrade': [], 'to-install': [], 'to-remove': [], 'to-change-arch': []}
+
+            install_summary = root.find('.//install-summary')
+            if install_summary is not None:
+                self.total_download_size = int(install_summary.attrib.get('download-size', 0))
+                self.need_reboot = install_summary.attrib.get('need-reboot') == "1"  # Verifica se precisa reiniciar
+
+            for section in ['to-install', 'to-remove', 'to-change-arch']:
+                for update in root.findall(f'.//{section}/solvable'):
+                    package = {
+                        'name': update.attrib.get('name'),
+                        'edition': update.attrib.get('edition'),
+                        'arch': update.attrib.get('arch'),
+                        'edition_old': update.attrib.get('edition-old', None),
+                        'arch_old': update.attrib.get('arch-old', None),
+                        'repository': update.attrib.get('repository'),
+                        'summary': update.attrib.get('summary', 'Sem resumo disponível'),
+                        'description': update.findtext('description', default='Sem descrição disponível')
+                    }
+                    self.package_info[section].append(package)
+
+            for update in root.findall('.//to-upgrade/solvable'):
+                if not any(update.attrib['name'] in [pkg['name'] for pkg in self.package_info[section]] for section in ['to-install', 'to-remove', 'to-change-arch']):
+                    package = {
+                        'name': update.attrib.get('name'),
+                        'edition': update.attrib.get('edition'),
+                        'arch': update.attrib.get('arch'),
+                        'edition_old': update.attrib.get('edition-old', None),
+                        'repository': update.attrib.get('repository'),
+                        'summary': update.attrib.get('summary', 'Sem resumo disponível'),
+                        'description': update.findtext('description', default='Sem descrição disponível')
+                    }
+                    self.package_info['to-upgrade'].append(package)
+
+            return True
+
+        except ET.ParseError:
+            print(_("Erro ao analisar o XML de saída."))
+            return False
+
+    def fetch_repo_urls(self):
+        if not self.repo_xml_output:
+            return False
+
+        try:
+            root = ET.fromstring(self.repo_xml_output)
+            for repo in root.findall('.//repo'):
+                alias = repo.attrib.get('alias')
+                url = repo.findtext('url')
+                self.repo_urls[alias] = url
+            return True
+        except ET.ParseError:
+            print(_("Erro ao analisar o XML de repositórios."))
+            return False
+
+    def populate_package_tree(self, filtered_info=None):
+        self.package_tree.clear()
+        package_info = filtered_info if filtered_info is not None else self.package_info
+
+        if package_info['to-upgrade']:
+            upgrade_count = len(package_info['to-upgrade'])
+            upgrade_item = QTreeWidgetItem(self.package_tree, [_("Pacotes que serão atualizados ({})").format(upgrade_count)])
+            for pkg in package_info['to-upgrade']:
+                QTreeWidgetItem(upgrade_item, [pkg['name']])
+
+        if package_info['to-install']:
+            install_count = len(package_info['to-install'])
+            install_item = QTreeWidgetItem(self.package_tree, [_("Pacotes novos que serão instalados ({})").format(install_count)])
+            for pkg in package_info['to-install']:
+                QTreeWidgetItem(install_item, [pkg['name']])
+
+        if package_info['to-remove']:
+            remove_count = len(package_info['to-remove'])
+            remove_item = QTreeWidgetItem(self.package_tree, [_("Pacotes que serão removidos ({})").format(remove_count)])
+            for pkg in package_info['to-remove']:
+                QTreeWidgetItem(remove_item, [pkg['name']])
+
+        if package_info['to-change-arch']:
+            arch_count = len(package_info['to-change-arch'])
+            arch_item = QTreeWidgetItem(self.package_tree, [_("Pacotes que mudarão de arquitetura ({})").format(arch_count)])
+            for pkg in package_info['to-change-arch']:
+                QTreeWidgetItem(arch_item, [pkg['name']])
+
+        self.package_tree.collapseAll()
+
+    def filter_package_list(self):
+        search_term = self.search_box.text().lower()
+        if search_term:
+            filtered_info = {
+                'to-upgrade': [pkg for pkg in self.package_info['to-upgrade'] if search_term in pkg['name'].lower()],
+                'to-install': [pkg for pkg in self.package_info['to-install'] if search_term in pkg['name'].lower()],
+                'to-remove': [pkg for pkg in self.package_info['to-remove'] if search_term in pkg['name'].lower()],
+                'to-change-arch': [pkg for pkg in self.package_info['to-change-arch'] if search_term in pkg['name'].lower()],
+            }
+            self.populate_package_tree(filtered_info)
+
+            for i in range(self.package_tree.topLevelItemCount()):
+                group = self.package_tree.topLevelItem(i)
+                if group.childCount() > 0:
+                    self.package_tree.expandItem(group)
+        else:
+            self.populate_package_tree()
+
+    def show_package_details(self, item):
+        package_name = item.text(0)
+
+        for category, packages in self.package_info.items():
+            for pkg in packages:
+                if pkg['name'] == package_name:
+                    package_detail_screen = QWidget()
+                    layout = QVBoxLayout()
+
+                    title_label = QLabel(_("Detalhes do pacote: {}").format(pkg['name']))
+                    font = QFont()
+                    font.setPointSize(16)
+                    font.setBold(True)
+                    title_label.setFont(font)
+                    layout.addWidget(title_label)
+
+                    tab_widget = QTabWidget()
+
+                    name_tab = QWidget()
+                    name_layout = QVBoxLayout()
+                    name_details = f"<b>{_('Nome:')}</b> {pkg['name']}"
+                    name_text_box = QTextEdit()
+                    name_text_box.setReadOnly(True)
+                    name_text_box.setHtml(name_details)
+                    name_layout.addWidget(name_text_box)
+                    name_tab.setLayout(name_layout)
+
+                    version_tab = QWidget()
+                    version_layout = QVBoxLayout()
+
+                    repo_url = self.repo_urls.get(pkg['repository'], '').rstrip('/')
+                    package_url = f"{repo_url}/{pkg['arch']}/{pkg['name']}-{pkg['edition']}.{pkg['arch']}.rpm" if repo_url else _("não disponível")
+
+                    if category == 'to-install':
+                        version_details = (
+                            f"<b>{_('Versão a ser instalada:')}</b> {pkg['edition']}<br><br>"
+                            f"<b>{_('Arquitetura:')}</b> {pkg['arch']}<br><br>"
+                            f"<b>{_('Repositório:')}</b> {pkg['repository']}<br><br>"
+                            f"<b>{_('URL:')}</b> {package_url}"
+                        )
+                    elif category == 'to-change-arch':
+                        version_details = (
+                            f"<b>{_('Versão atual:')}</b> {pkg['edition_old']}<br>"
+                            f"<b>{_('Versão nova:')}</b> {pkg['edition']}<br><br>"
+                            f"<b>{_('Arquitetura atual:')}</b> {pkg['arch_old']}<br>"
+                            f"<b>{_('Arquitetura nova:')}</b> {pkg['arch']}<br><br>"
+                            f"<b>{_('Repositório:')}</b> {pkg['repository']}<br><br>"
+                            f"<b>{_('URL:')}</b> {package_url}"
+                        )
+                    elif category == 'to-remove':
+                        version_details = (
+                            f"<b>{_('Versão atual:')}</b> {pkg['edition']}<br><br>"
+                            f"<b>{_('Arquitetura:')}</b> {pkg['arch']}<br><br>"
+                        )
+                    else:
+                        version_details = (
+                            f"<b>{_('Versão Atual:')}</b> {pkg.get('edition_old', _('Não instalado'))}<br>"
+                            f"<b>{_('Versão Nova:')}</b> {pkg['edition']}<br><br>"
+                            f"<b>{_('Arquitetura:')}</b> {pkg['arch']}<br><br>"
+                            f"<b>{_('Repositório:')}</b> {pkg['repository']}<br><br>"
+                            f"<b>{_('URL:')}</b> {package_url}"
+                        )
+
+                    version_text_box = QTextEdit()
+                    version_text_box.setReadOnly(True)
+                    version_text_box.setHtml(version_details)
+                    version_layout.addWidget(version_text_box)
+                    version_tab.setLayout(version_layout)
+
+                    description_tab = QWidget()
+                    description_layout = QVBoxLayout()
+                    description_details = (
+                        f"<b>{_('Resumo:')}</b> {pkg['summary']}<br><br>"
+                        f"<b>{_('Descrição:')}</b> {pkg['description']}"
+                    )
+                    description_text_box = QTextEdit()
+                    description_text_box.setReadOnly(True)
+                    description_text_box.setHtml(description_details)
+                    description_layout.addWidget(description_text_box)
+                    description_tab.setLayout(description_layout)
+
+                    tab_widget.addTab(name_tab, _("Nome"))
+                    tab_widget.addTab(version_tab, _("Versão"))
+                    tab_widget.addTab(description_tab, _("Descrição"))
+
+                    layout.addWidget(tab_widget)
+
+                    back_button = QPushButton(_("Voltar"))
+                    back_button.clicked.connect(lambda: self.stack.setCurrentWidget(self.package_list_screen))
+                    layout.addWidget(back_button)
+
+                    package_detail_screen.setLayout(layout)
+
+                    self.stack.addWidget(package_detail_screen)
+                    self.stack.setCurrentWidget(package_detail_screen)
+                    return
+
+    # ============================ Notificação DBus ============================
+
+    def _ensure_dbus_ready(self) -> bool:
+        try:
+            if self._dbus_loop is None:
+                DBusGMainLoop(set_as_default=True)
+                self._dbus_loop = GLib.MainLoop()
+
+                def _run_loop():
+                    try:
+                        self._dbus_loop.run()
+                    except Exception:
+                        pass
+
+                self._dbus_loop_thread = threading.Thread(target=_run_loop, name="DBus-GLib-Loop", daemon=True)
+                self._dbus_loop_thread.start()
+
+            if self._bus is None:
+                self._bus = dbus.SessionBus()
+
+            if self._notify_iface is None:
+                proxy = self._bus.get_object(BUS_NAME, OBJ_PATH)
+                self._notify_iface = dbus.Interface(proxy, dbus_interface=IFACE)
+
+                # Conecta sinais
+                self._bus.add_signal_receiver(
+                    self._on_dbus_action_invoked,
+                    dbus_interface=IFACE,
+                    signal_name="ActionInvoked",
+                    path=OBJ_PATH,
+                )
+                self._bus.add_signal_receiver(
+                    self._on_dbus_notification_closed,
+                    dbus_interface=IFACE,
+                    signal_name="NotificationClosed",
+                    path=OBJ_PATH,
+                )
+
+            return True
+        except Exception as e:
+            # Se DBus não estiver disponível, retornamos False (caindo no fallback do tray)
+            print(f"[update-viewer] Aviso: DBus indisponível ({e}). Usando fallback sem botões.")
+            return False
+
+    def _init_dbus_service(self):
+        """
+        Inicializa o serviço D-Bus para permitir que aplicações externas
+        forcem a verificação de atualizações.
+        """
+        try:
+            # Garante que o loop D-Bus está pronto
+            if not self._ensure_dbus_ready():
+                print("[update-viewer] Aviso: Não foi possível inicializar o serviço D-Bus para controle externo.")
+                return
+
+            # Solicita o nome do serviço no D-Bus
+            bus_name = dbus.service.BusName(UPDATE_SERVICE_BUS_NAME, bus=self._bus)
+            
+            # Cria e registra o serviço
+            self._dbus_service = UpdateViewerDBusService(self, bus_name, UPDATE_SERVICE_OBJ_PATH)
+            print(f"[update-viewer] Serviço D-Bus registrado: {UPDATE_SERVICE_BUS_NAME} em {UPDATE_SERVICE_OBJ_PATH}")
+        except dbus.exceptions.DBusException as e:
+            # Se o nome já estiver em uso, tenta conectar ao serviço existente
+            if "NameAlreadyExists" in str(e) or "Connection refused" in str(e):
+                print(f"[update-viewer] Aviso: Serviço D-Bus já está em uso ou não disponível: {e}")
+            else:
+                print(f"[update-viewer] Erro ao inicializar serviço D-Bus: {e}")
+        except Exception as e:
+            print(f"[update-viewer] Erro inesperado ao inicializar serviço D-Bus: {e}")
+
+    @staticmethod
+    def _build_actions_array(buttons_dict):
+        """buttons_dict: {action_id: label} -> lista linear exigida pelo protocolo."""
+        arr = []
+        for aid, label in buttons_dict.items():
+            arr.append(aid)
+            arr.append(label)
+        return arr
+
+    def send_update_notification_dbus(self, force_notification=False):
+        """
+        Envia notificação DBus sobre atualizações disponíveis.
+        
+        Args:
+            force_notification: Se True, ignora o intervalo mínimo e sempre envia notificação.
+                                Útil para transições de estado (sem atualizações -> com atualizações).
+        """
+        # Verifica se já passou tempo suficiente desde a última notificação
+        # Mas ignora essa verificação se force_notification for True
+        now = datetime.now()
+        if not force_notification and self._last_notification_time is not None:
+            time_since_last = (now - self._last_notification_time).total_seconds()
+            if time_since_last < MIN_NOTIFICATION_INTERVAL:
+                # Ainda não passou tempo suficiente, não envia nova notificação
+                return
+
+        if not self._ensure_dbus_ready():
+            # fallback sem botão
+            try:
+                self.tray_icon.showMessage(
+                    "Atualizações disponíveis",
+                    "Abra o menu da bandeja para instalar.",
+                    QSystemTrayIcon.MessageIcon.Information,
+                    8000
+                )
+            except TypeError:
+                pass
+            return
+
+        # Botões: id -> label (ordem será preservada no array final)
+        # Adiciona ação "default" para detectar cliques na notificação
+        # Usa um espaço como label para que a maioria dos servidores não exiba um botão visível
+        buttons = {
+            "default": " ",  # Ação padrão (label com espaço para não exibir botão visível)
+            "lembrar_mais_tarde": _("Lembrar mais tarde"),
+            "instalar": _("Instalar atualizações")
+        }
+        actions = self._build_actions_array(buttons)
+
+        hints = {
+            "urgency": dbus.Byte(1),  # 0=low, 1=normal, 2=critical
+            "default-action": dbus.String("default")  # Define a ação padrão para cliques na notificação
+        }
+
+        title = _("{} atualizações disponíveis").format(self.update_count)
+        body = _("Clique no botão para instalar agora ou no ícone da bandeja para ver detalhes.")
+        icon = "software-update-available"
+
+        # Usa replaces_id para substituir notificação anterior se existir
+        replaces_id = dbus.UInt32(0)
+        if self._notification_id is not None:
+            try:
+                replaces_id = dbus.UInt32(int(self._notification_id))
+            except (ValueError, TypeError):
+                replaces_id = dbus.UInt32(0)
+
+        try:
+            self._notification_id = self._notify_iface.Notify(
+                _("Indicador de atualizações de pacotes"),    # app_name
+                replaces_id,                               # replaces_id (substitui notificação anterior)
+                icon,                                      # app_icon
+                title,                                     # summary
+                body,                                      # body
+                actions,                                   # actions: [id1, label1, id2, label2, ...]
+                hints,                                     # hints (a{sv})
+                dbus.Int32(0)                              # expire_timeout (0 = nunca expirar)
+            )
+            # Atualiza o timestamp da última notificação enviada
+            self._last_notification_time = now
+            # Reseta a flag de ação executada para a nova notificação
+            self._notification_action_taken = False
+        except dbus.DBusException as e:
+            # Se for erro de excesso de notificações, apenas ignora silenciosamente
+            if "ExcessNotificationGeneration" in str(e):
+                # Não imprime erro para não poluir o log, apenas atualiza o timestamp
+                self._last_notification_time = now
+            else:
+                print(f"[update-viewer] Falha ao enviar notificação DBus: {e}")
+                # fallback
+                try:
+                    self.tray_icon.showMessage(
+                        _("Atualizações disponíveis"),
+                        _("Abra o menu da bandeja para instalar."),
+                        QSystemTrayIcon.MessageIcon.Information,
+                        8000
+                    )
+                except TypeError:
+                    pass
+
+    # ---------- Handlers de Sinais DBus ----------
+    def _on_dbus_action_invoked(self, n_id, action_key):
+        try:
+            if self._notification_id is None or int(n_id) != int(self._notification_id):
+                return  # não é a nossa notificação
+        except Exception:
+            return
+
+        if action_key == "default" or action_key == "":
+            # Clique na notificação - verifica se deve abrir a janela principal
+            self._notification_action_taken = True
+            if OPEN_WINDOW_ON_NOTIFICATION_CLICK:
+                QTimer.singleShot(0, self.restore_from_tray)
+        elif action_key == "lembrar_mais_tarde":
+            # Marca que uma ação foi executada via botões
+            self._notification_action_taken = True
+            # Chamar remind_later no *thread* principal do Qt
+            QTimer.singleShot(0, self.remind_later)
+        elif action_key == "instalar":
+            # Marca que uma ação foi executada via botões
+            self._notification_action_taken = True
+            # Chamar start_update_and_close no *thread* principal do Qt
+            QTimer.singleShot(0, self.start_update_and_close)
+
+    def _on_dbus_notification_closed(self, n_id, reason):
+        try:
+            if self._notification_id is None or int(n_id) != int(self._notification_id):
+                return
+        except Exception:
+            return
+        # reason: 1=expired, 2=dismissed by user, 3=closed by call, 4=undefined
+        # Se o usuário fechou a notificação (reason=2) e nenhuma ação foi executada via botões,
+        # significa que ele clicou na notificação - verifica se deve abrir a janela principal
+        if reason == 2 and not self._notification_action_taken and OPEN_WINDOW_ON_NOTIFICATION_CLICK:
+            # Clique na notificação (não nos botões) - abre a janela principal
+            QTimer.singleShot(0, self.restore_from_tray)
+
+    # ============================ Diálogo "Sobre" e utilitários ============================
+
+    def show_config_dialog(self):
+        """Abre o diálogo de configurações."""
+        # Fecha diálogo anterior se existir
+        if hasattr(self, '_config_dialog') and self._config_dialog is not None:
+            try:
+                if self._config_dialog.isVisible():
+                    self._config_dialog.close()
+            except RuntimeError:
+                pass
+            self._config_dialog = None
+        
+        dialog = ConfigDialog(self)
+        # Remove o parent após criar para permitir fechar a janela principal
+        dialog.setParent(None)
+        # Armazena referência para evitar que seja destruído
+        self._config_dialog = dialog
+        # Conecta sinal de fechamento para limpar referência
+        dialog.finished.connect(lambda: setattr(self, '_config_dialog', None))
+        dialog.show()  # Usa show() em vez de exec() para não bloquear
+
+    def show_about_dialog(self):
+        about_dialog = QDialog(self)
+        about_dialog.setWindowTitle(_("Sobre"))
+        about_dialog.setFixedWidth(400)
+
+        main_layout = QVBoxLayout(about_dialog)
+        main_layout.setContentsMargins(20, 10, 20, 10)
+
+        # Tabs
+        tabs = QTabWidget()
+        tab_sobre = QWidget()
+        tab_creditos = QWidget()
+        tabs.addTab(tab_sobre, _("Sobre"))
+        tabs.addTab(tab_creditos, _("Créditos"))
+
+        # Aba "Sobre"
+        sobre_layout = QVBoxLayout(tab_sobre)
+        sobre_layout.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignHCenter)
+
+        # Ícone
+        pixmap = QIcon.fromTheme("software-store").pixmap(96, 96)
+        if pixmap.isNull():
+            # Placeholder caso o ícone não seja encontrado
+            icon_label = QLabel("⭳")
+            icon_label.setFont(QFont("Open Sans", 64))
+            icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        else:
+            icon_label = QLabel()
+            icon_label.setPixmap(pixmap.scaled(96, 96, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation))
+            icon_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        sobre_layout.addWidget(icon_label)
+
+        # Título
+        about_title = QLabel(f"<b>{_('Visualizador de atualizações')}</b>")
+        about_title.setFont(QFont("Open Sans", 12))
+        about_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        sobre_layout.addWidget(about_title)
+
+        # Descrição
+        description = QLabel(_("Informa sobre as atualizações de software disponíveis"))
+        description.setFont(QFont("Open Sans", 10))
+        description.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        sobre_layout.addWidget(description)
+
+        # Link da página web
+        web_label = QLabel(f'<a href="https://github.com/jpmsb/preparando-computador-para-engenharia-de-tele/">{_("Página do projeto")}</a>')
+        web_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextBrowserInteraction)
+        web_label.setOpenExternalLinks(True)
+        web_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        sobre_layout.addWidget(web_label)
+
+        # Espaço
+        sobre_layout.addSpacing(10)
+
+        # Aviso de garantia
+        warn_label = QLabel(_("Este programa vem com absolutamente nenhuma garantia."))
+        warn_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        warn_label.setWordWrap(True)
+        warn_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextBrowserInteraction)
+        warn_label.setOpenExternalLinks(True)
+        warn_label.setStyleSheet("color: #8e99a6; font-size: 10pt;")
+        sobre_layout.addWidget(warn_label)
+
+        # Aba "Créditos"
+        creditos_layout = QVBoxLayout(tab_creditos)
+        creditos_layout.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignHCenter)
+
+        # Título
+        creditos_title = QLabel(f"<b>{_('Créditos')}</b>")
+        creditos_title.setFont(QFont("Open Sans", 12))
+        creditos_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        creditos_layout.addWidget(creditos_title)
+
+        # Inspiração
+        inspiration_label = QLabel(_("Inspirado no <a href='https://code.guido-berhoerster.org/projects/package-update-indicator/'>Package Update Indicator</a>"))
+        inspiration_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextBrowserInteraction)
+        inspiration_label.setOpenExternalLinks(True)
+        inspiration_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        creditos_layout.addWidget(inspiration_label)
+
+        # Copyright
+        copyright_label = QLabel("Copyright © 2018 Guido Berhörster")
+        copyright_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        creditos_layout.addWidget(copyright_label)
+
+        main_layout.addWidget(tabs)
+        about_dialog.setLayout(main_layout)
+        about_dialog.exec()
+
+    def format_time(self, seconds):
+        """ Formata o tempo para horas, minutos e segundos. """
+        hours, remainder = divmod(seconds, 3600)
+        minutes, seconds = divmod(remainder, 60)
+        time_str = []
+        if hours > 0:
+            time_str.append(f"{int(hours)}h")
+        if minutes > 0:
+            time_str.append(f"{int(minutes)}m")
+        time_str.append(f"{int(seconds)}s")
+        return " ".join(time_str)
+
+    def format_size(self, size_in_bytes):
+        for unit in ['bytes', 'KB', 'MB', 'GB', 'TB']:
+            if size_in_bytes < 1024:
+                return f"{size_in_bytes:.2f} {unit}"
+            size_in_bytes /= 1024
+
+
+def run_repo_check():
+    try:
+        result = subprocess.run(
+            ["zypper", "--xmlout", "repos", "-u"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            check=True
+        )
+        return result.stdout.decode('utf-8')
+    except subprocess.CalledProcessError as e:
+        print(f"Erro ao obter repositórios: {e.stderr.decode('utf-8')}", file=sys.stderr)
+        return None
+
+
+if __name__ == "__main__":
+    app = QApplication(sys.argv)
+    app.setQuitOnLastWindowClosed(False)
+
+    default_update_checker_files_directory = DEFAULT_UPDATE_CHECKER_FILES_DIRECTORY
+    default_run_log_file_path = DEFAULT_RUN_LOG_FILE_PATH
+    default_xml_file_path = DEFAULT_XML_FILE_PATH
+
+    # Se informado, lê o arquivo XML, a partir do primeiro argumento de linha de comando
+    # e salva na variável xml_output
+    xml_file = sys.argv[1] if len(sys.argv) > 1 else default_xml_file_path
+    xml_output = None
+
+    if xml_file and os.path.exists(xml_file):
+        with open(xml_file, 'r') as file:
+            xml_output = file.read() if xml_file else None
+
+    repo_xml_output = run_repo_check()
+
+    window = UpdateManager(xml_output, repo_xml_output)
+    window.hide()
+
+    sys.exit(app.exec())

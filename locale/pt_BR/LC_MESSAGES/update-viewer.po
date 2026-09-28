@@ -1,0 +1,592 @@
+# Portuguese (Brazil) translations for update-viewer
+# Copyright (C) 2024
+# This file is distributed under the same license as the update-viewer package.
+msgid ""
+msgstr ""
+"Project-Id-Version: update-viewer\n"
+"Report-Msgid-Bugs-To: \n"
+"POT-Creation-Date: 2025-12-28 20:45-0300\n"
+"PO-Revision-Date: 2024-01-01 12:00+0000\n"
+"Last-Translator: \n"
+"Language-Team: Portuguese (Brazil)\n"
+"Language: pt_BR\n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=2; plural=(n > 1);\n"
+
+#: update-viewer.py:233
+#, python-brace-format
+msgid "[update-viewer] Arquivo de configuração criado em: {}"
+msgstr "[update-viewer] Arquivo de configuração criado em: {}"
+
+#: update-viewer.py:271
+#, python-brace-format
+msgid "[update-viewer] Aviso: Erro ao processar '{}': {}. Usando valor padrão."
+msgstr ""
+"[update-viewer] Aviso: Erro ao processar '{}': {}. Usando valor padrão."
+
+#: update-viewer.py:280
+#, python-brace-format
+msgid ""
+"[update-viewer] Erro ao ler arquivo de configuração: {}. Usando valores "
+"padrão."
+msgstr ""
+"[update-viewer] Erro ao ler arquivo de configuração: {}. Usando valores "
+"padrão."
+
+#: update-viewer.py:395 update-viewer.py:431
+msgid "segundos"
+msgstr "segundos"
+
+#: update-viewer.py:395 update-viewer.py:431
+msgid "minutos"
+msgstr "minutos"
+
+#: update-viewer.py:395 update-viewer.py:431
+msgid "horas"
+msgstr "horas"
+
+#: update-viewer.py:395 update-viewer.py:431
+msgid "dias"
+msgstr "dias"
+
+#: update-viewer.py:439 update-viewer.py:899 update-viewer.py:1270
+#: update-viewer.py:1473 update-viewer.py:1555
+msgid "Preferências"
+msgstr "Preferências"
+
+#: update-viewer.py:464
+msgid "Intervalos"
+msgstr "Intervalos"
+
+#: update-viewer.py:470
+msgid "Intervalo de atualização:"
+msgstr "Intervalo de atualização:"
+
+#: update-viewer.py:479
+msgid "Intervalo após primeira execução bem-sucedida:"
+msgstr "Intervalo após primeira execução bem-sucedida:"
+
+#: update-viewer.py:490
+msgid "Idioma"
+msgstr "Idioma"
+
+#: update-viewer.py:495
+msgid "Idioma da interface:"
+msgstr "Idioma da interface:"
+
+#: update-viewer.py:500
+msgid "Automático"
+msgstr "Automático"
+
+#: update-viewer.py:522
+msgid "Comportamento do lembrete"
+msgstr "Comportamento do lembrete"
+
+#: update-viewer.py:528
+msgid "Intervalo para lembrar mais tarde:"
+msgstr "Intervalo para lembrar mais tarde:"
+
+#: update-viewer.py:537
+msgid "Quando o tempo de espera terminar, mostrar:"
+msgstr "Quando o tempo de espera terminar, mostrar:"
+
+#: update-viewer.py:541
+msgid "janela"
+msgstr "janela"
+
+#: update-viewer.py:542
+msgid "notificação"
+msgstr "notificação"
+
+#: update-viewer.py:553
+msgid "Abrir a janela principal ao clicar na notificação"
+msgstr "Abrir a janela principal ao clicar na notificação"
+
+#: update-viewer.py:567
+msgid "Arquivos"
+msgstr "Arquivos"
+
+#: update-viewer.py:573
+msgid "Diretório de arquivos:"
+msgstr "Diretório de arquivos:"
+
+#: update-viewer.py:581
+msgid "Arquivo de atualizações personalizado"
+msgstr "Arquivo de atualizações personalizado"
+
+#: update-viewer.py:587
+msgid "Caminho do arquivo XML:"
+msgstr "Caminho do arquivo XML:"
+
+#: update-viewer.py:600 update-viewer.py:626
+msgid "Procurar..."
+msgstr "Procurar..."
+
+#: update-viewer.py:607
+msgid "Arquivo de log personalizado"
+msgstr "Arquivo de log personalizado"
+
+#: update-viewer.py:613
+msgid "Caminho do arquivo de log:"
+msgstr "Caminho do arquivo de log:"
+
+#: update-viewer.py:635
+msgid "Comando de Atualização"
+msgstr "Comando de Atualização"
+
+#: update-viewer.py:659
+msgid "Restaurar padrões"
+msgstr "Restaurar padrões"
+
+#: update-viewer.py:663
+msgid "Salvar"
+msgstr "Salvar"
+
+#: update-viewer.py:665
+msgid "Cancelar"
+msgstr "Cancelar"
+
+#: update-viewer.py:706
+msgid "Selecionar arquivo XML"
+msgstr "Selecionar arquivo XML"
+
+#: update-viewer.py:706
+msgid "XML Files (*.xml);;All Files (*)"
+msgstr "Arquivos XML (*.xml);;Todos os Arquivos (*)"
+
+#: update-viewer.py:714
+msgid "Selecionar arquivo de log"
+msgstr "Selecionar arquivo de log"
+
+#: update-viewer.py:714
+msgid "Log Files (*.log);;All Files (*)"
+msgstr "Arquivos de Log (*.log);;Todos os Arquivos (*)"
+
+#: update-viewer.py:822
+msgid "Erro"
+msgstr "Erro"
+
+#: update-viewer.py:822
+#, python-brace-format
+msgid "Erro ao salvar configurações: {}"
+msgstr "Erro ao salvar configurações: {}"
+
+#: update-viewer.py:844
+#, python-brace-format
+msgid "[update-viewer] Erro ao forçar verificação via D-Bus: {}"
+msgstr "[update-viewer] Erro ao forçar verificação via D-Bus: {}"
+
+#: update-viewer.py:851 update-viewer.py:1092
+msgid "Atualizações Disponíveis"
+msgstr "Atualizações Disponíveis"
+
+#: update-viewer.py:891 update-viewer.py:1098 update-viewer.py:1445
+msgid "Sem atualizações disponíveis."
+msgstr "Sem atualizações disponíveis."
+
+#: update-viewer.py:895 update-viewer.py:1101 update-viewer.py:1985
+msgid "Instalar atualizações"
+msgstr "Instalar atualizações"
+
+#: update-viewer.py:897 update-viewer.py:1102
+msgid "Ver atualizações"
+msgstr "Ver atualizações"
+
+#: update-viewer.py:900
+msgid "Sobre..."
+msgstr "Sobre..."
+
+#: update-viewer.py:956
+#, python-brace-format
+msgid "Erro ao ler {}: {}"
+msgstr "Erro ao ler {}: {}"
+
+#: update-viewer.py:974
+#, python-brace-format
+msgid ""
+"Aguardando término do processo 'zypper dist-upgrade'. A janela será exibida "
+"em {}."
+msgstr ""
+"Aguardando término do processo 'zypper dist-upgrade'. A janela será exibida "
+"em {}."
+
+#: update-viewer.py:981
+#, python-brace-format
+msgid ""
+"Forçando exibição imediata da janela pois passaram-se {} desde a primeira "
+"execução, há mais de {} atrás."
+msgstr ""
+"Forçando exibição imediata da janela pois passaram-se {} desde a primeira "
+"execução, há mais de {} atrás."
+
+#: update-viewer.py:989
+#, python-brace-format
+msgid ""
+"Aguardando término do processo 'zypper dist-upgrade' e mais {}. A janela "
+"será exibida em {}."
+msgstr ""
+"Aguardando término do processo 'zypper dist-upgrade' e mais {}. A janela "
+"será exibida em {}."
+
+#: update-viewer.py:991
+#, python-brace-format
+msgid ""
+"Atualizações disponíveis. A janela será exibida automaticamente em {} se o "
+"usuário não interagir."
+msgstr ""
+"Atualizações disponíveis. A janela será exibida automaticamente em {} se o "
+"usuário não interagir."
+
+#: update-viewer.py:1024
+#, python-brace-format
+msgid ""
+"Processo 'zypper dist-upgrade' ainda está em execução. Verificando novamente "
+"em {}."
+msgstr ""
+"Processo 'zypper dist-upgrade' ainda está em execução. Verificando novamente "
+"em {}."
+
+#: update-viewer.py:1031
+#, python-brace-format
+msgid "Arquivo {} não encontrado. Atualizando status para 'sem atualizações'."
+msgstr "Arquivo {} não encontrado. Atualizando status para 'sem atualizações'."
+
+#: update-viewer.py:1051
+msgid "0 segundos"
+msgstr "0 segundos"
+
+#: update-viewer.py:1053
+msgid "1 segundo"
+msgstr "1 segundo"
+
+#: update-viewer.py:1055
+#, python-brace-format
+msgid "{} segundos"
+msgstr "{} segundos"
+
+#: update-viewer.py:1059
+msgid "1 minuto"
+msgstr "1 minuto"
+
+#: update-viewer.py:1061
+#, python-brace-format
+msgid "{} minutos"
+msgstr "{} minutos"
+
+#: update-viewer.py:1065
+msgid "1 hora"
+msgstr "1 hora"
+
+#: update-viewer.py:1067
+#, python-brace-format
+msgid "{} horas"
+msgstr "{} horas"
+
+#: update-viewer.py:1071
+msgid "1 dia"
+msgstr "1 dia"
+
+#: update-viewer.py:1073
+#, python-brace-format
+msgid "{} dias"
+msgstr "{} dias"
+
+#: update-viewer.py:1096
+#, python-brace-format
+msgid "{} atualizações disponíveis."
+msgstr "{} atualizações disponíveis."
+
+...
+
+#: update-viewer.py:2172
+#, python-brace-format
+msgid "Inspirado no <a href='{}'>Package Update Indicator</a>"
+msgstr "Inspirado no <a href='{}'>Package Update Indicator</a>"
+
+#: update-viewer.py:1141
+#, python-brace-format
+msgid "Lembrando mais tarde. A janela será exibida automaticamente em {}."
+msgstr "Lembrando mais tarde. A janela será exibida automaticamente em {}."
+
+#: update-viewer.py:1177
+#, python-brace-format
+msgid "Janela fechada. Será exibida novamente em {}."
+msgstr "Janela fechada. Será exibida novamente em {}."
+
+#: update-viewer.py:1240
+msgid "Sem atualizações"
+msgstr "Sem atualizações"
+
+#: update-viewer.py:1291
+msgid "Tudo certo! Sem atualizações disponíveis!"
+msgstr "Tudo certo! Sem atualizações disponíveis!"
+
+#: update-viewer.py:1302
+msgid "OK"
+msgstr "OK"
+
+#: update-viewer.py:1347
+msgid "Atualizando o sistema"
+msgstr "Atualizando o sistema"
+
+#: update-viewer.py:1348
+msgid "As atualizações estão sendo instaladas em segundo plano."
+msgstr "As atualizações estão sendo instaladas em segundo plano."
+
+#: update-viewer.py:1360
+msgid "Verificando atualizações..."
+msgstr "Verificando atualizações..."
+
+#: update-viewer.py:1404 update-viewer.py:1495
+#, python-brace-format
+msgid ""
+"Erro ao verificar atualizações. {} erros encontrados. Não há atualizações "
+"disponíveis."
+msgstr ""
+"Erro ao verificar atualizações. {} erros encontrados. Não há atualizações "
+"disponíveis."
+
+#: update-viewer.py:1432 update-viewer.py:1458 update-viewer.py:1530
+#, python-brace-format
+msgid "Há {} pacotes que serão atualizados."
+msgstr "Há {} pacotes que serão atualizados."
+
+#: update-viewer.py:1460 update-viewer.py:1566
+msgid "Pesquise por pacotes..."
+msgstr "Pesquise por pacotes..."
+
+#: update-viewer.py:1466 update-viewer.py:1604
+msgid "Atualizar agora"
+msgstr "Atualizar agora"
+
+#: update-viewer.py:1469 update-viewer.py:1633 update-viewer.py:1984
+msgid "Lembrar mais tarde"
+msgstr "Lembrar mais tarde"
+
+#: update-viewer.py:1576
+#, python-brace-format
+msgid "Tamanho do download: {}"
+msgstr "Tamanho do download: {}"
+
+#: update-viewer.py:1591
+msgid ""
+"É necessário reiniciar o sistema para que algumas alterações entrem em vigor."
+msgstr ""
+"É necessário reiniciar o sistema para que algumas alterações entrem em vigor."
+
+#: update-viewer.py:1707
+msgid "Erro ao analisar o XML de saída."
+msgstr "Erro ao analisar o XML de saída."
+
+#: update-viewer.py:1722
+msgid "Erro ao analisar o XML de repositórios."
+msgstr "Erro ao analisar o XML de repositórios."
+
+#: update-viewer.py:1731
+#, python-brace-format
+msgid "Pacotes que serão atualizados ({})"
+msgstr "Pacotes que serão atualizados ({})"
+
+#: update-viewer.py:1737
+#, python-brace-format
+msgid "Pacotes novos que serão instalados ({})"
+msgstr "Pacotes novos que serão instalados ({})"
+
+#: update-viewer.py:1743
+#, python-brace-format
+msgid "Pacotes que serão removidos ({})"
+msgstr "Pacotes que serão removidos ({})"
+
+#: update-viewer.py:1749
+#, python-brace-format
+msgid "Pacotes que mudarão de arquitetura ({})"
+msgstr "Pacotes que mudarão de arquitetura ({})"
+
+#: update-viewer.py:1782
+#, python-brace-format
+msgid "Detalhes do pacote: {}"
+msgstr "Detalhes do pacote: {}"
+
+#: update-viewer.py:1793
+msgid "Nome:"
+msgstr "Nome:"
+
+#: update-viewer.py:1804
+msgid "não disponível"
+msgstr "não disponível"
+
+#: update-viewer.py:1808
+msgid "Versão a ser instalada:"
+msgstr "Versão a ser instalada:"
+
+#: update-viewer.py:1809 update-viewer.py:1825 update-viewer.py:1831
+msgid "Arquitetura:"
+msgstr "Arquitetura:"
+
+#: update-viewer.py:1810 update-viewer.py:1819 update-viewer.py:1832
+msgid "Repositório:"
+msgstr "Repositório:"
+
+#: update-viewer.py:1811 update-viewer.py:1820 update-viewer.py:1833
+msgid "URL:"
+msgstr "URL:"
+
+#: update-viewer.py:1815 update-viewer.py:1824
+msgid "Versão atual:"
+msgstr "Versão atual:"
+
+#: update-viewer.py:1816
+msgid "Versão nova:"
+msgstr "Versão nova:"
+
+#: update-viewer.py:1817
+msgid "Arquitetura atual:"
+msgstr "Arquitetura atual:"
+
+#: update-viewer.py:1818
+msgid "Arquitetura nova:"
+msgstr "Arquitetura nova:"
+
+#: update-viewer.py:1829
+msgid "Versão Atual:"
+msgstr "Versão Atual:"
+
+#: update-viewer.py:1829
+msgid "Não instalado"
+msgstr "Não instalado"
+
+#: update-viewer.py:1830
+msgid "Versão Nova:"
+msgstr "Versão Nova:"
+
+#: update-viewer.py:1845
+msgid "Resumo:"
+msgstr "Resumo:"
+
+#: update-viewer.py:1846
+msgid "Descrição:"
+msgstr "Descrição:"
+
+#: update-viewer.py:1854
+msgid "Nome"
+msgstr "Nome"
+
+#: update-viewer.py:1855
+msgid "Versão"
+msgstr "Versão"
+
+#: update-viewer.py:1856
+msgid "Descrição"
+msgstr "Descrição"
+
+#: update-viewer.py:1860
+msgid "Voltar"
+msgstr "Voltar"
+
+#: update-viewer.py:1911
+#, python-brace-format
+msgid ""
+"[update-viewer] Aviso: DBus indisponível ({}). Usando fallback sem botões."
+msgstr ""
+"[update-viewer] Aviso: DBus indisponível ({}). Usando fallback sem botões."
+
+#: update-viewer.py:1922
+msgid ""
+"[update-viewer] Aviso: Não foi possível inicializar o serviço D-Bus para "
+"controle externo."
+msgstr ""
+"[update-viewer] Aviso: Não foi possível inicializar o serviço D-Bus para "
+"controle externo."
+
+#: update-viewer.py:1930
+#, python-brace-format
+msgid "[update-viewer] Serviço D-Bus registrado: {} em {}"
+msgstr "[update-viewer] Serviço D-Bus registrado: {} em {}"
+
+#: update-viewer.py:1934
+#, python-brace-format
+msgid ""
+"[update-viewer] Aviso: Serviço D-Bus já está em uso ou não disponível: {}"
+msgstr ""
+"[update-viewer] Aviso: Serviço D-Bus já está em uso ou não disponível: {}"
+
+#: update-viewer.py:1936
+#, python-brace-format
+msgid "[update-viewer] Erro ao inicializar serviço D-Bus: {}"
+msgstr "[update-viewer] Erro ao inicializar serviço D-Bus: {}"
+
+#: update-viewer.py:1938
+#, python-brace-format
+msgid "[update-viewer] Erro inesperado ao inicializar serviço D-Bus: {}"
+msgstr "[update-viewer] Erro inesperado ao inicializar serviço D-Bus: {}"
+
+#: update-viewer.py:1994
+#, python-brace-format
+msgid "{} atualizações disponíveis"
+msgstr "{} atualizações disponíveis"
+
+#: update-viewer.py:1995
+msgid ""
+"Clique no botão para instalar agora ou no ícone da bandeja para ver detalhes."
+msgstr ""
+"Clique no botão para instalar agora ou no ícone da bandeja para ver detalhes."
+
+#: update-viewer.py:2008
+msgid "Indicador de atualizações de pacotes"
+msgstr "Indicador de atualizações de pacotes"
+
+#: update-viewer.py:2027
+#, python-brace-format
+msgid "[update-viewer] Falha ao enviar notificação DBus: {}"
+msgstr "[update-viewer] Falha ao enviar notificação DBus: {}"
+
+#: update-viewer.py:2031
+msgid "Atualizações disponíveis"
+msgstr "Atualizações disponíveis"
+
+#: update-viewer.py:2032
+msgid "Abra o menu da bandeja para instalar."
+msgstr "Abra o menu da bandeja para instalar."
+
+#: update-viewer.py:2100 update-viewer.py:2110
+msgid "Sobre"
+msgstr "Sobre"
+
+#: update-viewer.py:2111 update-viewer.py:2166
+msgid "Créditos"
+msgstr "Créditos"
+
+#: update-viewer.py:2131
+msgid "Visualizador de atualizações"
+msgstr "Visualizador de atualizações"
+
+#: update-viewer.py:2137
+msgid "Informa sobre as atualizações de software disponíveis"
+msgstr "Informa sobre as atualizações de software disponíveis"
+
+#: update-viewer.py:2143
+msgid "Página do projeto"
+msgstr "Página do projeto"
+
+#: update-viewer.py:2153
+msgid "Este programa vem com absolutamente nenhuma garantia."
+msgstr "Este programa vem com absolutamente nenhuma garantia."
+
+#: update-viewer.py:2172
+#, python-brace-format
+msgid "Inspirado no <a href='{}'>Package Update Indicator</a>"
+msgstr ""
+
+#: update-viewer.py:2216
+#, python-brace-format
+msgid "Erro ao obter repositórios: {}"
+msgstr "Erro ao obter repositórios: {}"
+
+#~ msgid ""
+#~ "Inspirado no <a href='https://code.guido-berhoerster.org/projects/package-"
+#~ "update-indicator/'>Package Update Indicator</a>"
+#~ msgstr ""
+#~ "Inspirado no <a href='https://code.guido-berhoerster.org/projects/package-"
+#~ "update-indicator/'>Package Update Indicator</a>"

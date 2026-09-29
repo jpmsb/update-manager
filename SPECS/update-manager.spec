@@ -9,7 +9,6 @@ Requires:       curl
 Requires:       python3
 Requires:       python313-PyQt6
 Requires:       python313-dbus-python
-Requires:       bc
 Requires:       PackageKit
 BuildRequires:  gettext-tools
 BuildArch:      noarch

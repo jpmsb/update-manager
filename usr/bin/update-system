@@ -5,7 +5,7 @@ set -euo pipefail
 
 GITHUB_API="https://api.github.com/repos/jpmsb/update-manager/releases/latest"
 PACKAGE_NAME="update-manager"
-ZYPPER_UPGRADE="/usr/bin/zypper dist-upgrade --auto-agree-with-licenses --replacefiles --force-resolution"
+ZYPPER_UPGRADE=(/usr/bin/zypper dist-upgrade --auto-agree-with-licenses --replacefiles --force-resolution)
 
 detect_ui_lang() {
     local lang="${LC_ALL:-${LC_MESSAGES:-${LANG:-en_US.UTF-8}}}"
@@ -20,63 +20,101 @@ detect_ui_lang() {
 
 UI_LANG="$(detect_ui_lang)"
 
+# Color / dynamic UI when stdout is a terminal.
+if [ -t 1 ]; then
+    USE_COLOR=1
+else
+    USE_COLOR=0
+fi
+
 msg() {
     local key="$1"
     case "$UI_LANG:$key" in
         pt:terminal_title) echo "Instalar atualizações" ;;
-        pt:checking_self) echo "Verificando atualização do update-manager..." ;;
-        pt:self_up_to_date) echo "update-manager já está na versão mais recente." ;;
-        pt:self_updating) echo "Atualizando update-manager..." ;;
-        pt:self_ok) echo "update-manager atualizado com sucesso." ;;
-        pt:self_fail) echo "Falha ao atualizar update-manager; continuando com a atualização do sistema." ;;
-        pt:self_skip_net) echo "Não foi possível consultar o GitHub; continuando com a atualização do sistema." ;;
-        pt:refreshing_repos) echo "Atualizando as informações dos repositórios" ;;
-        pt:running) echo "Executando" ;;
-        pt:proceeding) echo "Prosseguindo para a atualização dos pacotes..." ;;
-        pt:review) echo "Verifique o que será realizado antes de prosseguir!!" ;;
-        pt:something_wrong) echo "Algo deu errado!! Você pode tentar novamente." ;;
-        pt:press_enter) echo "Pressione ENTER para sair..." ;;
+        pt:phase_self) echo "update-manager" ;;
+        pt:checking_self) echo "Consultando GitHub…" ;;
+        pt:self_updating) echo "Nova versão disponível" ;;
+        pt:self_installing) echo "Instalando" ;;
+        pt:self_ok) echo "Atualizado" ;;
+        pt:self_fail) echo "Falha ao atualizar; seguindo com o sistema" ;;
+        pt:phase_repos) echo "Repositórios" ;;
+        pt:refreshing_repos) echo "Atualizando metadados…" ;;
+        pt:phase_upgrade) echo "Sistema" ;;
+        pt:proceeding) echo "zypper dist-upgrade — revise e confirme" ;;
+        pt:something_wrong) echo "Algo deu errado. Você pode tentar novamente." ;;
+        pt:press_enter) echo "Pressione ENTER para sair…" ;;
         pt:must_be_root) echo "Este modo requer root." ;;
 
         *:terminal_title) echo "Install updates" ;;
-        *:checking_self) echo "Checking for update-manager updates..." ;;
-        *:self_up_to_date) echo "update-manager is already up to date." ;;
-        *:self_updating) echo "Updating update-manager..." ;;
-        *:self_ok) echo "update-manager updated successfully." ;;
-        *:self_fail) echo "Failed to update update-manager; continuing with the system upgrade." ;;
-        *:self_skip_net) echo "Could not query GitHub; continuing with the system upgrade." ;;
-        *:refreshing_repos) echo "Refreshing repository metadata" ;;
-        *:running) echo "Running" ;;
-        *:proceeding) echo "Proceeding with package upgrade..." ;;
-        *:review) echo "Review what will be done before continuing!!" ;;
-        *:something_wrong) echo "Something went wrong!! You can try again." ;;
-        *:press_enter) echo "Press ENTER to exit..." ;;
+        *:phase_self) echo "update-manager" ;;
+        *:checking_self) echo "Checking GitHub…" ;;
+        *:self_updating) echo "New version available" ;;
+        *:self_installing) echo "Installing" ;;
+        *:self_ok) echo "Updated" ;;
+        *:self_fail) echo "Update failed; continuing with the system" ;;
+        *:phase_repos) echo "Repositories" ;;
+        *:refreshing_repos) echo "Refreshing metadata…" ;;
+        *:phase_upgrade) echo "System" ;;
+        *:proceeding) echo "zypper dist-upgrade — review and confirm" ;;
+        *:something_wrong) echo "Something went wrong. You can try again." ;;
+        *:press_enter) echo "Press ENTER to exit…" ;;
         *:must_be_root) echo "This mode requires root." ;;
         *) echo "$key" ;;
     esac
 }
 
-box() {
-    local sentence="$1"
-    local sentence_length=${#sentence}
-    local horizontal_spacing=$((sentence_length + 2))
-    local left_upper="╔" right_upper="╗" left_bottom="╚" right_bottom="╝"
-    local horizontal="═" vertical="║" horizontal_line="" i
+_c() {
+    local code="$1" text="$2"
+    if [ "$USE_COLOR" -eq 1 ]; then
+        printf '\033[%sm%s\033[0m' "$code" "$text"
+    else
+        printf '%s' "$text"
+    fi
+}
 
-    for i in $(seq 1 "$horizontal_spacing"); do
-        horizontal_line="${horizontal}${horizontal_line}"
-    done
+# Modern phase header: accent bar + bold title (no multi-line boxes).
+phase() {
+    echo
+    if [ "$USE_COLOR" -eq 1 ]; then
+        printf '%s %s\n' "$(_c '1;36' '▍')" "$(_c '1' "$1")"
+        printf '\033[2m%s\033[0m\n' "────────────────────────────────"
+    else
+        printf '== %s ==\n' "$1"
+    fi
+}
 
-    echo "${left_upper}${horizontal_line}${right_upper}"
-    echo "${vertical}${horizontal_line//$horizontal/ }${vertical}"
-    echo "${vertical} ${sentence} ${vertical}"
-    echo "${vertical}${horizontal_line//$horizontal/ }${vertical}"
-    echo "${left_bottom}${horizontal_line}${right_bottom}"
+ok()   { printf '  %s %s\n' "$(_c '1;32' '✓')" "$1"; }
+warn() { printf '  %s %s\n' "$(_c '1;33' '!')" "$1"; }
+err()  { printf '  %s %s\n' "$(_c '1;31' '✗')" "$1"; }
+info() { printf '  %s %s\n' "$(_c '2' '·')" "$1"; }
+
+SPIN_PID=""
+
+start_spin() {
+    local message="$1"
+    [ "$USE_COLOR" -eq 1 ] || { info "$message"; return 0; }
+    (
+        local i=0
+        local frames=(⠋ ⠙ ⠹ ⠸ ⠼ ⠴ ⠦ ⠧ ⠇ ⠏)
+        local n=${#frames[@]}
+        while true; do
+            printf '\r  \033[1;36m%s\033[0m %s' "${frames[i++%n]}" "$message"
+            sleep 0.08
+        done
+    ) &
+    SPIN_PID=$!
+}
+
+stop_spin() {
+    if [ -n "${SPIN_PID:-}" ]; then
+        kill "$SPIN_PID" 2>/dev/null || true
+        wait "$SPIN_PID" 2>/dev/null || true
+        SPIN_PID=""
+        printf '\r\033[K'
+    fi
 }
 
 version_gt() {
-    # Compare dotted numeric versions (e.g. 2026.09.29.0017) as integer tuples.
-    # sort -V is unreliable with leading zeros in the HHMM segment.
     local remote="$1" local_ver="$2"
     python3 -c '
 import sys
@@ -103,19 +141,23 @@ stop_packagekit() {
     done
 }
 
+clear_zypp_lock() {
+    echo "" > /run/zypp.pid
+}
+
 self_update_update_manager() {
-    box "$(msg checking_self)"
+    # Quiet unless there is a real update to install.
+    start_spin "$(msg checking_self)"
 
     local json tag rpm_url current tmp_rpm
     if ! json=$(curl -fsSL \
         -A "update-manager-self-update" \
         -H "Accept: application/vnd.github+json" \
         "$GITHUB_API" 2>/dev/null); then
-        box "$(msg self_skip_net)"
+        stop_spin
         return 0
     fi
 
-    # Parse tag_name and first matching RPM asset URL (python3 already required by the package).
     tag=""
     rpm_url=""
     {
@@ -138,7 +180,7 @@ print(url)
     ) || true
 
     if [ -z "${tag:-}" ] || [ -z "${rpm_url:-}" ]; then
-        box "$(msg self_skip_net)"
+        stop_spin
         return 0
     fi
 
@@ -148,46 +190,51 @@ print(url)
     fi
 
     if ! version_gt "$tag" "$current"; then
-        box "$(msg self_up_to_date)"
+        stop_spin
         return 0
     fi
 
-    box "$(msg self_updating)"
+    stop_spin
+    phase "$(msg phase_self)"
+    warn "$(msg self_updating): $current → $tag"
+    info "$(msg self_installing)…"
+
     tmp_rpm=$(mktemp /tmp/update-manager-XXXXXX.rpm)
     if curl -fsSL -A "update-manager-self-update" -o "$tmp_rpm" "$rpm_url" \
-        && rpm -Uvh "$tmp_rpm"; then
-        box "$(msg self_ok)"
+        && rpm -U --quiet "$tmp_rpm"; then
+        ok "$(msg self_ok) ($tag)"
     else
-        box "$(msg self_fail)"
+        err "$(msg self_fail)"
     fi
     rm -f "$tmp_rpm"
 }
 
 refresh_repos() {
-    local command="$1"
-    box "$(msg refreshing_repos)"
-    box "$(msg running) \"$command\""
+    phase "$(msg phase_repos)"
+    start_spin "$(msg refreshing_repos)"
+    clear_zypp_lock
     set +e
-    $command
+    pkcon get-updates >/dev/null 2>&1
     set -e
-    sleep 1
+    sleep 0.3
+    stop_spin
 }
 
 run_upgrade() {
-    local command="$1" rc
-    echo "" > /run/zypp.pid
+    local rc
+    phase "$(msg phase_upgrade)"
+    info "$(msg proceeding)"
+    echo
 
-    box "$(msg proceeding)"
-    box "$(msg running) \"$command\""
-    box "$(msg review)"
-
+    clear_zypp_lock
     set +e
-    $command
+    "${ZYPPER_UPGRADE[@]}"
     rc=$?
     set -e
 
     if [ "$rc" -ne 0 ]; then
-        box "$(msg something_wrong)"
+        echo
+        err "$(msg something_wrong)"
     fi
 }
 
@@ -201,12 +248,14 @@ run_as_root() {
     export ZYPP_PCK_PRELOAD=1
     export ZYPP_MEDIANETWORK=1
 
+    trap 'stop_spin' EXIT
+
     self_update_update_manager
 
-    refresh_repos "pkcon get-updates"
+    refresh_repos
     stop_packagekit 3 &
     disown || true
-    run_upgrade "$ZYPPER_UPGRADE"
+    run_upgrade
 
     rm -rf /var/tmp/rpm-tmp.* /var/tmp/zypp.*
     rm -f /var/log/update-checker/updates.xml
@@ -214,7 +263,7 @@ run_as_root() {
 
 wait_for_enter() {
     echo
-    echo "$(msg press_enter)"
+    info "$(msg press_enter)"
     if [ -r /dev/tty ] && [ -w /dev/tty ]; then
         read -r _ </dev/tty || true
     else
@@ -251,7 +300,6 @@ case "${1:-}" in
         fi
         ;;
     *)
-        # Terminal path (arg "0") or any other non-empty arg: elevate then wait.
         "$RUN_PRIVILEGED" "$0" --root
         wait_for_enter
         timeout 3 dbus-send --session --type=method_call \

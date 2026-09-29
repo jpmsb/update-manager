@@ -75,9 +75,22 @@ box() {
 }
 
 version_gt() {
-    local newer
-    newer=$(printf '%s\n%s\n' "$1" "$2" | sort -V | tail -n1)
-    [ "$newer" = "$1" ] && [ "$1" != "$2" ]
+    # Compare dotted numeric versions (e.g. 2026.09.29.0017) as integer tuples.
+    # sort -V is unreliable with leading zeros in the HHMM segment.
+    local remote="$1" local_ver="$2"
+    python3 -c '
+import sys
+def parts(v):
+    out = []
+    for p in v.lstrip("vV").split("."):
+        try:
+            out.append(int(p))
+        except ValueError:
+            out.append(0)
+    return out
+remote, current = sys.argv[1], sys.argv[2]
+sys.exit(0 if parts(remote) > parts(current) else 1)
+' "$remote" "$local_ver"
 }
 
 stop_packagekit() {
@@ -94,13 +107,21 @@ self_update_update_manager() {
     box "$(msg checking_self)"
 
     local json tag rpm_url current tmp_rpm
-    if ! json=$(curl -fsSL -H "Accept: application/vnd.github+json" "$GITHUB_API" 2>/dev/null); then
+    if ! json=$(curl -fsSL \
+        -A "update-manager-self-update" \
+        -H "Accept: application/vnd.github+json" \
+        "$GITHUB_API" 2>/dev/null); then
         box "$(msg self_skip_net)"
         return 0
     fi
 
     # Parse tag_name and first matching RPM asset URL (python3 already required by the package).
-    read -r tag rpm_url < <(
+    tag=""
+    rpm_url=""
+    {
+        read -r tag
+        read -r rpm_url
+    } < <(
         printf '%s' "$json" | python3 -c '
 import json, sys
 data = json.load(sys.stdin)
@@ -111,16 +132,20 @@ for a in data.get("assets", []):
     if name.endswith(".rpm") and "update-manager" in name:
         url = a.get("browser_download_url", "") or ""
         break
-print(tag, url)
+print(tag)
+print(url)
 ' 2>/dev/null || true
-    )
+    ) || true
 
     if [ -z "${tag:-}" ] || [ -z "${rpm_url:-}" ]; then
         box "$(msg self_skip_net)"
         return 0
     fi
 
-    current=$(rpm -q --qf '%{VERSION}' "$PACKAGE_NAME" 2>/dev/null || echo "0")
+    current=$(rpm -q --qf '%{VERSION}' "$PACKAGE_NAME" 2>/dev/null || true)
+    if [ -z "${current:-}" ]; then
+        current="0"
+    fi
 
     if ! version_gt "$tag" "$current"; then
         box "$(msg self_up_to_date)"
@@ -129,7 +154,8 @@ print(tag, url)
 
     box "$(msg self_updating)"
     tmp_rpm=$(mktemp /tmp/update-manager-XXXXXX.rpm)
-    if curl -fsSL -o "$tmp_rpm" "$rpm_url" && rpm -Uvh "$tmp_rpm"; then
+    if curl -fsSL -A "update-manager-self-update" -o "$tmp_rpm" "$rpm_url" \
+        && rpm -Uvh "$tmp_rpm"; then
         box "$(msg self_ok)"
     else
         box "$(msg self_fail)"

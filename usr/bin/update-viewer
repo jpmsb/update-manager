@@ -1208,7 +1208,8 @@ class UpdateManager(QWidget):
         
         dlg = QDialog(self)
         dlg.setWindowTitle(_("Sem atualizações"))
-        dlg.setModal(True)
+        dlg.setModal(False)
+        dlg.setParent(None)
         # Armazena referência ao diálogo para evitar múltiplas instâncias
         self._all_good_dialog = dlg
 
@@ -1280,10 +1281,8 @@ class UpdateManager(QWidget):
         layout.addStretch(2)
         layout.addLayout(buttons)
 
-        dlg.exec()
-        # Limpa a referência quando o diálogo for fechado
-        if hasattr(self, '_all_good_dialog'):
-            self._all_good_dialog = None
+        dlg.finished.connect(lambda: setattr(self, '_all_good_dialog', None))
+        dlg.show()
 
     def install_updates_from_tray(self):
         if self.stack is None:
@@ -2027,6 +2026,8 @@ class UpdateManager(QWidget):
         # Conecta sinal de fechamento para limpar referência
         dialog.finished.connect(lambda: setattr(self, '_config_dialog', None))
         dialog.show()  # Usa show() em vez de exec() para não bloquear
+        dialog.raise_()
+        dialog.activateWindow()
 
     def show_about_dialog(self):
         about_dialog = QDialog(self)

@@ -887,21 +887,21 @@ class UpdateManager(QWidget):
         self.install_action.setEnabled(False)
         self.show_action = QAction(_("Ver atualizações"), self)
         self.show_action.setEnabled(False)
-        config_action = QAction(_("Preferências"), self)
-        about_action = QAction(_("Sobre..."), self)
+        self.config_action = QAction(_("Preferências"), self)
+        self.about_action = QAction(_("Sobre..."), self)
 
         self.tray_menu.addAction(self.install_action)
         self.tray_menu.addAction(self.show_action)
         self.tray_menu.addSeparator()
-        self.tray_menu.addAction(config_action)
-        self.tray_menu.addAction(about_action)
+        self.tray_menu.addAction(self.config_action)
+        self.tray_menu.addAction(self.about_action)
         self.tray_icon.setContextMenu(self.tray_menu)
 
         # Conecta as ações do tray
         self.show_action.triggered.connect(self.restore_from_tray)
         self.install_action.triggered.connect(self.install_updates_from_tray)
-        config_action.triggered.connect(self.show_config_dialog)
-        about_action.triggered.connect(self.show_about_dialog)
+        self.config_action.triggered.connect(self.show_config_dialog)
+        self.about_action.triggered.connect(self.show_about_dialog)
         self.tray_icon.activated.connect(self.on_tray_activated)
 
         self.tray_icon.show()
@@ -1049,6 +1049,34 @@ class UpdateManager(QWidget):
             days = seconds // 86400
             return f"{days} dia{'s' if days > 1 else ''}"
 
+    def _clear_main_ui(self):
+        """
+        Remove o layout e os widgets da janela principal para permitir
+        reconstrução limpa via initUI() (necessário para hotswap de idioma).
+        """
+        if self.stack is not None:
+            self.stack.setParent(None)
+            self.stack.deleteLater()
+            self.stack = None
+
+        old_layout = self.layout()
+        if old_layout is not None:
+            while old_layout.count():
+                item = old_layout.takeAt(0)
+                widget = item.widget()
+                if widget is not None:
+                    widget.setParent(None)
+                    widget.deleteLater()
+            # Orfã o layout antigo: QWidget só aceita um layout por vez
+            orphan = QWidget()
+            orphan.setLayout(old_layout)
+            orphan.deleteLater()
+
+        self.package_list_screen = None
+        self.info_label = None
+        self.package_tree = None
+        self.search_box = None
+
     def reload_translations(self, lang=None):
         """
         Recarrega as traduções com o novo idioma e atualiza a UI.
@@ -1077,21 +1105,54 @@ class UpdateManager(QWidget):
         # Atualiza ações do menu do tray
         self.install_action.setText(_("Instalar atualizações"))
         self.show_action.setText(_("Ver atualizações"))
-        
-        # Reconstrói a UI se já foi inicializada
-        if self.stack is not None:
-            # Reconstrói a UI completamente
-            self.initUI()
-        
-        # Atualiza o diálogo de configurações se estiver aberto
+        self.config_action.setText(_("Preferências"))
+        self.about_action.setText(_("Sobre..."))
+
+        was_main_visible = self.isVisible()
+        had_main_ui = self.stack is not None
+
+        all_good_was_visible = False
+        if hasattr(self, '_all_good_dialog') and self._all_good_dialog is not None:
+            try:
+                all_good_was_visible = self._all_good_dialog.isVisible()
+            except RuntimeError:
+                self._all_good_dialog = None
+
+        config_was_visible = False
         if hasattr(self, '_config_dialog') and self._config_dialog is not None:
             try:
-                if self._config_dialog.isVisible():
-                    # Fecha e recria o diálogo para atualizar os textos
-                    self._config_dialog.close()
-                    self.show_config_dialog()
+                config_was_visible = self._config_dialog.isVisible()
+            except RuntimeError:
+                self._config_dialog = None
+
+        # Reconstrói a janela principal (precisa limpar layout antigo)
+        if had_main_ui:
+            self._clear_main_ui()
+            self.initUI(emit_notifications=False)
+            if was_main_visible:
+                self.show()
+                self.raise_()
+                self.activateWindow()
+
+        # Recria o diálogo "sem atualizações" se estiver aberto
+        if all_good_was_visible:
+            try:
+                if self._all_good_dialog is not None:
+                    self._all_good_dialog.close()
             except RuntimeError:
                 pass
+            self._all_good_dialog = None
+            self.show_all_good_window()
+
+        # Atualiza o diálogo de configurações se estiver aberto
+        if config_was_visible:
+            try:
+                if self._config_dialog is not None:
+                    self._config_dialog.close()
+            except RuntimeError:
+                pass
+            self._config_dialog = None
+            self.show_config_dialog()
 
     def restore_from_tray(self):
         # Se a janela já estiver visível, apenas a ativa sem criar uma nova instância
@@ -1416,7 +1477,7 @@ class UpdateManager(QWidget):
 
     # ============ Interface do usuário ============
 
-    def initUI(self):
+    def initUI(self, emit_notifications=True):
         if not self.xml_output or not self.repo_xml_output:
             return
 
@@ -1451,15 +1512,16 @@ class UpdateManager(QWidget):
             # Habilita UI e notificação
             self.show_action.setEnabled(True)
             self.install_action.setEnabled(True)
-            self.tray_icon.setToolTip(f"{self.update_count} atualizações disponíveis.")
+            self.tray_icon.setToolTip(_("{} atualizações disponíveis.").format(self.update_count))
             self.tray_icon.setIcon(QIcon.fromTheme("software-update-available"))
 
-            # Detecta se houve transição de "sem atualizações" para "com atualizações"
-            is_state_transition = (self._previous_update_count == 0 and self.update_count > 0)
-            
-            # Envia notificação DBus com botão "Instalar atualizações"
-            # Se for uma transição de estado, sempre envia notificação (ignora intervalo mínimo)
-            self.send_update_notification_dbus(force_notification=is_state_transition)
+            if emit_notifications:
+                # Detecta se houve transição de "sem atualizações" para "com atualizações"
+                is_state_transition = (self._previous_update_count == 0 and self.update_count > 0)
+
+                # Envia notificação DBus com botão "Instalar atualizações"
+                # Se for uma transição de estado, sempre envia notificação (ignora intervalo mínimo)
+                self.send_update_notification_dbus(force_notification=is_state_transition)
         else:
             self.install_action.setEnabled(False)
 

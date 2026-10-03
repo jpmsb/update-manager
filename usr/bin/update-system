@@ -39,6 +39,8 @@ msg() {
         pt:self_fail) echo "Falha ao atualizar; seguindo com o sistema" ;;
         pt:phase_repos) echo "Repositórios" ;;
         pt:refreshing_repos) echo "Atualizando metadados…" ;;
+        pt:repos_done) echo "Metadados atualizados" ;;
+        pt:repo_fail) echo "Falha ao atualizar metadados" ;;
         pt:phase_upgrade) echo "Sistema" ;;
         pt:proceeding) echo "zypper dist-upgrade — revise e confirme" ;;
         pt:something_wrong) echo "Algo deu errado. Você pode tentar novamente." ;;
@@ -54,6 +56,8 @@ msg() {
         *:self_fail) echo "Update failed; continuing with the system" ;;
         *:phase_repos) echo "Repositories" ;;
         *:refreshing_repos) echo "Refreshing metadata…" ;;
+        *:repos_done) echo "Metadata refreshed" ;;
+        *:repo_fail) echo "Failed to refresh metadata" ;;
         *:phase_upgrade) echo "System" ;;
         *:proceeding) echo "zypper dist-upgrade — review and confirm" ;;
         *:something_wrong) echo "Something went wrong. You can try again." ;;
@@ -112,6 +116,55 @@ stop_spin() {
         SPIN_PID=""
         printf '\r\033[K'
     fi
+}
+
+# Determinate progress: [████░░░░]  8/22  label
+draw_progress() {
+    local current="$1" total="$2" label="$3"
+    local width=24
+    local filled=0
+    local max_label=40
+    local i bar=""
+
+    if [ "$total" -gt 0 ]; then
+        filled=$((current * width / total))
+        [ "$filled" -gt "$width" ] && filled=$width
+    fi
+
+    if [ "${#label}" -gt "$max_label" ]; then
+        label="${label:0:$((max_label - 1))}…"
+    fi
+
+    if [ "$USE_COLOR" -ne 1 ]; then
+        info "${current}/${total}  ${label}"
+        return 0
+    fi
+
+    for ((i = 0; i < width; i++)); do
+        if [ "$i" -lt "$filled" ]; then
+            bar+="█"
+        else
+            bar+="░"
+        fi
+    done
+
+    printf '\r\033[K  %s [%s]  %s/%s  %s' \
+        "$(_c '1;36' '▸')" "$(_c '1;36' "$bar")" "$current" "$total" "$label"
+}
+
+list_enabled_repo_aliases() {
+    /usr/bin/zypper --xmlout lr 2>/dev/null \
+        | python3 /dev/fd/3 3<<'PY' 2>/dev/null || true
+import re, sys
+raw = sys.stdin.read()
+for tag in re.finditer(r"<repo\b([^>]*)>", raw):
+    attrs = tag.group(1)
+    if not re.search(r'\benabled="1"', attrs):
+        continue
+    match = re.search(r'\balias="([^"]+)"', attrs)
+    if match:
+        print(match.group(1))
+PY
 }
 
 version_gt() {
@@ -210,14 +263,58 @@ print(url)
 }
 
 refresh_repos() {
+    local -a repos=()
+    local alias=""
+    local i=0
+    local total=0
+    local rc=0
+
     phase "$(msg phase_repos)"
-    start_spin "$(msg refreshing_repos)"
+    info "$(msg refreshing_repos)"
+
     clear_zypp_lock
-    set +e
-    pkcon get-updates >/dev/null 2>&1
-    set -e
+    stop_packagekit 3 &
+    disown || true
     sleep 0.3
-    stop_spin
+
+    while IFS= read -r alias; do
+        [ -n "$alias" ] && repos+=("$alias")
+    done < <(list_enabled_repo_aliases)
+
+    total=${#repos[@]}
+
+    # Fallback: listing failed or empty — single global refresh with spinner.
+    if [ "$total" -eq 0 ]; then
+        start_spin "$(msg refreshing_repos)"
+        clear_zypp_lock
+        set +e
+        /usr/bin/zypper --gpg-auto-import-keys -n refresh >/dev/null 2>&1
+        set -e
+        stop_spin
+        ok "$(msg repos_done)"
+        return 0
+    fi
+
+    for alias in "${repos[@]}"; do
+        i=$((i + 1))
+        draw_progress "$i" "$total" "$alias"
+        clear_zypp_lock
+        set +e
+        /usr/bin/zypper --gpg-auto-import-keys -n refresh "$alias" >/dev/null 2>&1
+        rc=$?
+        set -e
+        if [ "$rc" -ne 0 ]; then
+            if [ "$USE_COLOR" -eq 1 ]; then
+                printf '\r\033[K'
+            fi
+            warn "$(msg repo_fail): $alias"
+        fi
+    done
+
+    if [ "$USE_COLOR" -eq 1 ]; then
+        printf '\r\033[K'
+    fi
+    ok "$(msg repos_done) ($total)"
 }
 
 run_upgrade() {
@@ -253,8 +350,6 @@ run_as_root() {
     self_update_update_manager
 
     refresh_repos
-    stop_packagekit 3 &
-    disown || true
     run_upgrade
 
     rm -rf /var/tmp/rpm-tmp.* /var/tmp/zypp.*

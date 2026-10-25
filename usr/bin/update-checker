@@ -17,6 +17,37 @@ close_packagekit(){
 }
 
 
+cleanup_expired_rpm_keys() {
+    local current_timestamp
+    current_timestamp=$(date +%s)
+    local expired_keys_found=0
+
+    echo "Checking for expired RPM GPG keys..."
+
+    while read -r key; do
+        [ -z "$key" ] && continue
+
+        local exp_info
+        exp_info=$(rpm -q --qf '%{DESCRIPTION}\n' "$key" 2>/dev/null | \
+                   gpg --homedir /tmp --with-colons --show-keys 2>/dev/null | \
+                   awk -F: -v now="$current_timestamp" '($1=="pub" || $1=="sub") && ($2=="e" || ($7!="" && $7>0 && $7<=now)) {print $1, $2, $7; exit}')
+
+        if [ -n "$exp_info" ]; then
+            local key_summary
+            key_summary=$(rpm -q --qf '%{SUMMARY}\n' "$key" 2>/dev/null)
+            echo "Found expired key: $key ($key_summary)"
+            echo "Removing expired key from RPM database to allow refresh..."
+            rpm --erase --allmatches "$key" 2>/dev/null
+            expired_keys_found=1
+        fi
+    done < <(rpm -q gpg-pubkey --qf '%{NAME}-%{VERSION}-%{RELEASE}\n' 2>/dev/null)
+
+    if [ "$expired_keys_found" -eq 1 ]; then
+        echo "Expired keys removed. Subsequent repository refresh will re-import updated keys."
+    fi
+}
+
+
 # This script must be run as root
 if [ "$EUID" -ne 0 ]; then
   echo "This script must be run as root."
@@ -27,6 +58,9 @@ LOG_DIR="/var/log/update-checker"
 
 # Create the log directory if it doesn't exist
 mkdir -p "$LOG_DIR"
+
+# Clean up any expired RPM GPG keys before refreshing
+cleanup_expired_rpm_keys
 
 # Refresh all the repositories
 echo "Refreshing repositories..."

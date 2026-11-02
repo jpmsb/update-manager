@@ -3,6 +3,12 @@ name: Build RPM and publish release
 on:
   push:
     branches: [main]
+    paths:
+      - 'usr/**'
+      - 'etc/**'
+      - 'locale/**'
+      - 'SPECS/update-manager.spec'
+      - 'scripts/build-source-tarball.sh'
   workflow_dispatch:
 
 permissions:

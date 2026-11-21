@@ -577,6 +577,19 @@ msgstr "Inspirado no <a href='{}'>Package Update Indicator</a>"
 msgid "Erro ao obter repositórios: {}"
 msgstr "Erro ao obter repositórios: {}"
 
+msgid "Erro ao atualizar"
+msgstr "Erro ao atualizar"
+
+msgid "Não foi possível iniciar o atualizador do sistema."
+msgstr "Não foi possível iniciar o atualizador do sistema."
+
+msgid ""
+"Não foi possível iniciar o atualizador do sistema.\n"
+"Verifique o comando em Configurações (padrão: /usr/bin/update-system)."
+msgstr ""
+"Não foi possível iniciar o atualizador do sistema.\n"
+"Verifique o comando em Configurações (padrão: /usr/bin/update-system)."
+
 #~ msgid ""
 #~ "Inspirado no <a href='https://code.guido-berhoerster.org/projects/package-"
 #~ "update-indicator/'>Package Update Indicator</a>"

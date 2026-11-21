@@ -11,6 +11,7 @@ Ships a tray application, a systemd timer that checks for available updates, and
 | `/usr/bin/update-viewer` | Main application, featuring a GUI and a tray |
 | `/usr/bin/update-checker` | Root job used by the timer that checks for updates |
 | `/usr/bin/update-system` | Script that performs the system upgrade |
+| `/usr/bin/update-console` | Built-in dark PyQt6 console used for interactive upgrades |
 | `/usr/lib/systemd/system/update-checker.{service,timer}` | Systemd unit and timer files |
 | `/etc/xdg/autostart/update-viewer.desktop` | Autostart entry |
 

@@ -14,15 +14,41 @@ import struct
 import subprocess
 import sys
 import termios
-import gettext
 
 from PyQt6.QtCore import Qt, QSocketNotifier, QTimer, pyqtSignal, QObject
 from PyQt6.QtGui import QColor, QFont, QFontDatabase, QKeyEvent, QTextCharFormat, QTextCursor
 from PyQt6.QtWidgets import QApplication, QMainWindow, QPlainTextEdit, QVBoxLayout, QWidget
 
 UPDATE_SYSTEM = "/usr/bin/update-system"
-WINDOW_TITLE_PT = "Instalar atualizações"
-WINDOW_TITLE_EN = "Install updates"
+
+# User-visible strings (aligned with update-viewer: en, pt, es, de, ja)
+MESSAGES = {
+    "en": {
+        "window_title": "Install updates",
+        "press_enter": "\nPress ENTER to exit…\n",
+        "process_exited": "\n[update-console] process exited with code {code}\n",
+    },
+    "pt": {
+        "window_title": "Instalar atualizações",
+        "press_enter": "\nPressione ENTER para sair…\n",
+        "process_exited": "\n[update-console] processo terminou com código {code}\n",
+    },
+    "es": {
+        "window_title": "Instalar actualizaciones",
+        "press_enter": "\nPulse ENTER para salir…\n",
+        "process_exited": "\n[update-console] el proceso terminó con código {code}\n",
+    },
+    "de": {
+        "window_title": "Aktualisierungen installieren",
+        "press_enter": "\nDrücken Sie ENTER zum Beenden…\n",
+        "process_exited": "\n[update-console] Prozess beendet mit Code {code}\n",
+    },
+    "ja": {
+        "window_title": "更新をインストール",
+        "press_enter": "\n終了するには ENTER を押してください…\n",
+        "process_exited": "\n[update-console] プロセスはコード {code} で終了しました\n",
+    },
+}
 
 # xfce4-terminal-like dark palette (normal + bright)
 ANSI_COLORS = [
@@ -50,18 +76,48 @@ FONT_POINT_SIZE = 16
 
 
 def detect_ui_lang() -> str:
-    lang = (
+    """Return en/pt/es/de/ja, matching update-viewer supported languages."""
+    raw = (
         os.environ.get("LC_ALL")
         or os.environ.get("LC_MESSAGES")
         or os.environ.get("LANG")
         or "en_US.UTF-8"
     )
-    lang = lang.split(".")[0].split("_")[0].lower()
-    return "pt" if lang == "pt" else "en"
+    full = raw.split(".")[0].lower()
+    lang = full.split("_")[0]
+    mapping = {
+        "pt": "pt",
+        "pt_br": "pt",
+        "pt_pt": "pt",
+        "es": "es",
+        "es_es": "es",
+        "es_mx": "es",
+        "de": "de",
+        "de_de": "de",
+        "de_at": "de",
+        "de_ch": "de",
+        "ja": "ja",
+        "ja_jp": "ja",
+        "en": "en",
+        "en_us": "en",
+        "en_gb": "en",
+    }
+    if full in mapping:
+        return mapping[full]
+    if lang in mapping:
+        return mapping[lang]
+    return "en"
+
+
+def tr(key: str, **kwargs) -> str:
+    lang = detect_ui_lang()
+    table = MESSAGES.get(lang) or MESSAGES["en"]
+    text = table.get(key) or MESSAGES["en"][key]
+    return text.format(**kwargs) if kwargs else text
 
 
 def window_title() -> str:
-    return WINDOW_TITLE_PT if detect_ui_lang() == "pt" else WINDOW_TITLE_EN
+    return tr("window_title")
 
 
 def pick_mono_font() -> QFont:
@@ -572,20 +628,9 @@ class UpdateConsoleWindow(QMainWindow):
     def _on_exited(self, code: int) -> None:
         # --root ends after the upgrade; prompt locally (like wait_for_enter).
         self._poll_update_viewer()
-        lang = detect_ui_lang()
         if code != 0:
-            err = (
-                f"\n[update-console] processo terminou com código {code}\n"
-                if lang == "pt"
-                else f"\n[update-console] process exited with code {code}\n"
-            )
-            self.view.feed(err.encode("utf-8"))
-        msg = (
-            "\nPressione ENTER para sair…\n"
-            if lang == "pt"
-            else "\nPress ENTER to exit…\n"
-        )
-        self.view.feed(msg.encode("utf-8"))
+            self.view.feed(tr("process_exited", code=code).encode("utf-8"))
+        self.view.feed(tr("press_enter").encode("utf-8"))
         self._awaiting_exit = True
 
 
@@ -594,9 +639,6 @@ def main() -> int:
         locale.setlocale(locale.LC_ALL, "")
     except locale.Error:
         pass
-
-    # Avoid gettext domain hard dependency if locales are missing.
-    gettext.install("update-viewer", localedir="/usr/share/locale")
 
     app = QApplication(sys.argv)
     app.setApplicationName("update-console")

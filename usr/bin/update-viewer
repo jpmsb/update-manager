@@ -1366,10 +1366,29 @@ class UpdateManager(QWidget):
         # Divide o comando em programa e argumentos usando shlex
         cmd_parts = shlex.split(UPDATE_COMMAND)
         if cmd_parts:
-            QProcess.startDetached(cmd_parts[0], cmd_parts[1:])
+            started = QProcess.startDetached(cmd_parts[0], cmd_parts[1:])
         else:
             # Fallback se o comando estiver vazio
-            QProcess.startDetached("update-system")
+            started = QProcess.startDetached("update-system")
+
+        if not started:
+            try:
+                self.tray_icon.showMessage(
+                    title=_("Erro ao atualizar"),
+                    msg=_("Não foi possível iniciar o atualizador do sistema."),
+                    icon=QSystemTrayIcon.MessageIcon.Critical,
+                    msecs=8000,
+                )
+            except TypeError:
+                pass
+            from PyQt6.QtWidgets import QMessageBox
+            QMessageBox.critical(
+                self,
+                _("Erro ao atualizar"),
+                _("Não foi possível iniciar o atualizador do sistema.\n"
+                  "Verifique o comando em Configurações (padrão: /usr/bin/update-system)."),
+            )
+            return
 
         # tentativa de notificação (com parâmetros nomeados p/ evitar o TypeError)
         try:

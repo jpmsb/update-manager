@@ -17,6 +17,8 @@ BuildArch:      noarch
 Desktop update viewer for openSUSE-based systems. Includes a systemd timer
 that checks for available updates, a PyQt6 tray application, and a privileged
 system upgrade helper that can self-update this package from GitHub Releases.
+On graphical sessions the upgrade helper opens a built-in dark PyQt6 console
+(update-console) with interactive PTY input.
 
 %prep
 %setup -q
@@ -37,6 +39,7 @@ install -d %{buildroot}/usr/share/locale
 install -m 0755 usr/bin/update-viewer %{buildroot}/usr/bin/update-viewer
 install -m 0755 usr/bin/update-checker %{buildroot}/usr/bin/update-checker
 install -m 0755 usr/bin/update-system %{buildroot}/usr/bin/update-system
+install -m 0755 usr/bin/update-console %{buildroot}/usr/bin/update-console
 ln -s update-system %{buildroot}/usr/bin/atualizar-sistema
 
 install -m 0644 usr/lib/systemd/system/update-checker.service \
@@ -68,6 +71,7 @@ fi
 /usr/bin/update-viewer
 /usr/bin/update-checker
 /usr/bin/update-system
+/usr/bin/update-console
 /usr/bin/atualizar-sistema
 /usr/lib/systemd/system/update-checker.service
 /usr/lib/systemd/system/update-checker.timer

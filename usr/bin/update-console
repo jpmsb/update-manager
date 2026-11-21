@@ -1,0 +1,609 @@
+#!/usr/bin/env python3
+# Interactive dark console for privileged system upgrades (PTY + pkexec).
+# GPL-3.0-or-later
+
+from __future__ import annotations
+
+import fcntl
+import locale
+import os
+import pty
+import select
+import signal
+import struct
+import subprocess
+import sys
+import termios
+import gettext
+
+from PyQt6.QtCore import Qt, QSocketNotifier, QTimer, pyqtSignal, QObject
+from PyQt6.QtGui import QColor, QFont, QFontDatabase, QKeyEvent, QTextCharFormat, QTextCursor
+from PyQt6.QtWidgets import QApplication, QMainWindow, QPlainTextEdit, QVBoxLayout, QWidget
+
+UPDATE_SYSTEM = "/usr/bin/update-system"
+WINDOW_TITLE_PT = "Instalar atualizações"
+WINDOW_TITLE_EN = "Install updates"
+
+# xfce4-terminal-like dark palette (normal + bright)
+ANSI_COLORS = [
+    "#000000",  # 0 black
+    "#cd0000",  # 1 red
+    "#00cd00",  # 2 green
+    "#cdcd00",  # 3 yellow
+    "#0000ee",  # 4 blue
+    "#cd00cd",  # 5 magenta
+    "#00cdcd",  # 6 cyan
+    "#e5e5e5",  # 7 white
+    "#7f7f7f",  # 8 bright black
+    "#ff0000",  # 9 bright red
+    "#00ff00",  # 10 bright green
+    "#ffff00",  # 11 bright yellow
+    "#5c5cff",  # 12 bright blue
+    "#ff00ff",  # 13 bright magenta
+    "#00ffff",  # 14 bright cyan
+    "#ffffff",  # 15 bright white
+]
+
+DEFAULT_FG = "#dcdcdc"
+DEFAULT_BG = "#000000"
+FONT_POINT_SIZE = 16
+
+
+def detect_ui_lang() -> str:
+    lang = (
+        os.environ.get("LC_ALL")
+        or os.environ.get("LC_MESSAGES")
+        or os.environ.get("LANG")
+        or "en_US.UTF-8"
+    )
+    lang = lang.split(".")[0].split("_")[0].lower()
+    return "pt" if lang == "pt" else "en"
+
+
+def window_title() -> str:
+    return WINDOW_TITLE_PT if detect_ui_lang() == "pt" else WINDOW_TITLE_EN
+
+
+def pick_mono_font() -> QFont:
+    preferred = ["Hack", "Source Code Pro", "DejaVu Sans Mono", "Liberation Mono", "Monospace"]
+    available = set(QFontDatabase.families())
+    family = next((name for name in preferred if name in available), "Monospace")
+    font = QFont(family)
+    font.setStyleHint(QFont.StyleHint.Monospace)
+    font.setFixedPitch(True)
+    font.setPointSize(FONT_POINT_SIZE)
+    return font
+
+
+class AnsiState:
+    def __init__(self) -> None:
+        self.reset()
+
+    def reset(self) -> None:
+        self.fg = DEFAULT_FG
+        self.bold = False
+        self.dim = False
+        self.fg_idx: int | None = None
+
+    def apply_sgr(self, params: list[int]) -> None:
+        if not params:
+            params = [0]
+        i = 0
+        while i < len(params):
+            code = params[i]
+            if code == 0:
+                self.reset()
+            elif code == 1:
+                self.bold = True
+                self.dim = False
+            elif code == 2:
+                self.dim = True
+            elif code == 22:
+                self.bold = False
+                self.dim = False
+            elif code == 39:
+                self.fg = DEFAULT_FG
+                self.fg_idx = None
+            elif 30 <= code <= 37:
+                self.fg_idx = code - 30
+                self.fg = ANSI_COLORS[self.fg_idx]
+            elif 90 <= code <= 97:
+                self.fg_idx = (code - 90) + 8
+                self.fg = ANSI_COLORS[self.fg_idx]
+            elif code == 38 and i + 2 < len(params) and params[i + 1] == 5:
+                idx = params[i + 2] % 256
+                if idx < 16:
+                    self.fg_idx = idx
+                    self.fg = ANSI_COLORS[idx]
+                i += 2
+            i += 1
+        if self.bold and self.fg_idx is not None and self.fg_idx < 8:
+            self.fg = ANSI_COLORS[self.fg_idx + 8]
+
+    def char_format(self) -> QTextCharFormat:
+        fmt = QTextCharFormat()
+        color = QColor(self.fg)
+        if self.dim and not self.bold:
+            color = color.darker(150)
+        fmt.setForeground(color)
+        font = pick_mono_font()
+        font.setBold(self.bold)
+        fmt.setFont(font)
+        return fmt
+
+
+class PtySession(QObject):
+    output = pyqtSignal(bytes)
+    exited = pyqtSignal(int)
+
+    def __init__(self, argv: list[str], parent: QObject | None = None) -> None:
+        super().__init__(parent)
+        self._proc: subprocess.Popen[bytes] | None = None
+        self._master_fd = -1
+        self._notifier: QSocketNotifier | None = None
+
+        master_fd, slave_fd = pty.openpty()
+        self._master_fd = master_fd
+
+        flags = fcntl.fcntl(master_fd, fcntl.F_GETFL)
+        fcntl.fcntl(master_fd, fcntl.F_SETFL, flags | os.O_NONBLOCK)
+
+        env = os.environ.copy()
+        env["TERM"] = "xterm-256color"
+        env["COLORTERM"] = "truecolor"
+
+        # subprocess + PTY avoids a manual fork/exec after Qt threads start.
+        self._proc = subprocess.Popen(
+            argv,
+            stdin=slave_fd,
+            stdout=slave_fd,
+            stderr=slave_fd,
+            start_new_session=True,
+            env=env,
+            close_fds=True,
+        )
+        os.close(slave_fd)
+
+        self._notifier = QSocketNotifier(master_fd, QSocketNotifier.Type.Read, self)
+        self._notifier.activated.connect(self._on_readable)
+
+        self._child_timer = QTimer(self)
+        self._child_timer.setInterval(200)
+        self._child_timer.timeout.connect(self._poll_child)
+        self._child_timer.start()
+
+    def set_winsize(self, rows: int, cols: int) -> None:
+        if self._master_fd < 0:
+            return
+        try:
+            winsize = struct.pack("HHHH", max(rows, 1), max(cols, 1), 0, 0)
+            fcntl.ioctl(self._master_fd, termios.TIOCSWINSZ, winsize)
+            if self._proc is not None and self._proc.pid:
+                os.kill(self._proc.pid, signal.SIGWINCH)
+        except OSError:
+            pass
+
+    def write(self, data: bytes) -> None:
+        if self._master_fd < 0 or not data:
+            return
+        try:
+            os.write(self._master_fd, data)
+        except OSError:
+            pass
+
+    def _on_readable(self, *_args) -> None:
+        if self._master_fd < 0:
+            return
+        try:
+            while True:
+                chunk = os.read(self._master_fd, 8192)
+                if not chunk:
+                    self._cleanup_fd()
+                    return
+                self.output.emit(chunk)
+                readable, _, _ = select.select([self._master_fd], [], [], 0)
+                if not readable:
+                    break
+        except BlockingIOError:
+            return
+        except OSError:
+            self._cleanup_fd()
+
+    def _poll_child(self) -> None:
+        if self._proc is None:
+            return
+        code = self._proc.poll()
+        if code is None:
+            return
+        self._child_timer.stop()
+        self._cleanup_fd()
+        self.exited.emit(int(code))
+        self._proc = None
+
+    def _cleanup_fd(self) -> None:
+        if self._notifier is not None:
+            self._notifier.setEnabled(False)
+            self._notifier.deleteLater()
+            self._notifier = None
+        if self._master_fd >= 0:
+            try:
+                os.close(self._master_fd)
+            except OSError:
+                pass
+            self._master_fd = -1
+
+    def terminate(self) -> None:
+        if self._proc is not None and self._proc.poll() is None:
+            try:
+                os.killpg(self._proc.pid, signal.SIGTERM)
+            except OSError:
+                try:
+                    self._proc.terminate()
+                except OSError:
+                    pass
+
+
+class ConsoleView(QPlainTextEdit):
+    input_bytes = pyqtSignal(bytes)
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setReadOnly(True)
+        self.setUndoRedoEnabled(False)
+        self.setMaximumBlockCount(20000)
+        self.setCursorWidth(2)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self._ansi = AnsiState()
+        self._csi_buf = ""
+        self._in_esc = False
+        self._in_csi = False
+        self._in_osc = False
+        self._osc_buf = ""
+        self._utf8_pending = b""
+        self._line_col = 0
+
+        self.setStyleSheet(
+            f"""
+            QPlainTextEdit {{
+                background-color: {DEFAULT_BG};
+                color: {DEFAULT_FG};
+                border: none;
+                padding: 8px;
+            }}
+            """
+        )
+        self.setFont(pick_mono_font())
+
+    def keyPressEvent(self, event: QKeyEvent) -> None:  # noqa: N802
+        if event.key() in (Qt.Key.Key_C,) and event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+            self.input_bytes.emit(b"\x03")
+            return
+        if event.key() == Qt.Key.Key_Backspace:
+            self.input_bytes.emit(b"\x7f")
+            return
+        if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            self.input_bytes.emit(b"\r")
+            return
+        if event.key() == Qt.Key.Key_Tab:
+            self.input_bytes.emit(b"\t")
+            return
+        text = event.text()
+        if text:
+            self.input_bytes.emit(text.encode("utf-8", errors="replace"))
+            return
+        super().keyPressEvent(event)
+
+    def feed(self, data: bytes) -> None:
+        if self._utf8_pending:
+            data = self._utf8_pending + data
+            self._utf8_pending = b""
+        try:
+            text = data.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            # Keep incomplete trailing sequence for the next chunk.
+            valid = data[: exc.start]
+            self._utf8_pending = data[exc.start :]
+            text = valid.decode("utf-8", errors="replace")
+        self._consume_text(text)
+
+    def _consume_text(self, text: str) -> None:
+        for ch in text:
+            if self._in_csi:
+                self._csi_buf += ch
+                # CSI final byte is in 0x40-0x7E.
+                if "@" <= ch <= "~":
+                    self._handle_csi(self._csi_buf)
+                    self._csi_buf = ""
+                    self._in_csi = False
+                    self._in_esc = False
+                continue
+            if self._in_esc:
+                if ch == "[":
+                    self._in_csi = True
+                    self._csi_buf = ""
+                elif ch == "]":
+                    # OSC: swallow until BEL or ST — do not print/control.
+                    self._in_esc = False
+                    self._in_osc = True
+                    self._osc_buf = ""
+                else:
+                    # Unsupported short escape: drop introducer only.
+                    self._in_esc = False
+                continue
+            if getattr(self, "_in_osc", False):
+                if ch == "\a" or ch == "\x1b":
+                    self._in_osc = False
+                    self._osc_buf = ""
+                    if ch == "\x1b":
+                        self._in_esc = True
+                else:
+                    self._osc_buf = getattr(self, "_osc_buf", "") + ch
+                continue
+            if ch == "\x1b":
+                self._in_esc = True
+                continue
+            if ch == "\r":
+                self._carriage_return()
+                continue
+            if ch == "\b":
+                self._backspace()
+                continue
+            if ch == "\n":
+                self._write_newline()
+                continue
+            if ch == "\a":
+                continue
+            self._write_chars(ch, self._ansi.char_format())
+
+    def _handle_csi(self, body: str) -> None:
+        if not body:
+            return
+        final = body[-1]
+        params_str = body[:-1]
+        params: list[int] = []
+        if params_str:
+            for part in params_str.split(";"):
+                if part == "":
+                    params.append(0)
+                else:
+                    try:
+                        params.append(int(part))
+                    except ValueError:
+                        params.append(0)
+
+        # Scrollback is append-only: never honor clear-screen / cursor-up /
+        # delete-lines that would wipe previous upgrade output. Only SGR and
+        # last-line edits (K / G / C / D) are applied.
+        if final == "m":
+            self._ansi.apply_sgr(params)
+        elif final == "K":
+            mode = params[0] if params else 0
+            self._erase_in_last_line(mode)
+        elif final == "G":
+            col = max((params[0] if params else 1), 1)
+            self._move_in_last_line(col)
+        elif final == "C":
+            n = params[0] if params else 1
+            self._nudge_in_last_line(n)
+        elif final == "D":
+            n = params[0] if params else 1
+            self._nudge_in_last_line(-n)
+        # Intentionally ignored: J (erase display), H/f (cursor position),
+        # A/B (cursor up/down), M/L (delete/insert lines), etc.
+
+    def _last_block_cursor(self) -> QTextCursor:
+        cursor = self.textCursor()
+        cursor.movePosition(QTextCursor.MoveOperation.End)
+        return cursor
+
+    def _write_newline(self) -> None:
+        cursor = self._last_block_cursor()
+        cursor.setCharFormat(self._ansi.char_format())
+        cursor.insertText("\n")
+        self.setTextCursor(cursor)
+        self._line_col = 0
+        self.ensureCursorVisible()
+
+    def _write_chars(self, text: str, fmt: QTextCharFormat) -> None:
+        """Write into the last line; overwrite after CR instead of inserting."""
+        cursor = self._last_block_cursor()
+        block = cursor.block()
+        col = getattr(self, "_line_col", len(block.text()))
+        col = max(0, min(col, len(block.text())))
+        cursor.setPosition(block.position() + col)
+
+        remaining = len(block.text()) - col
+        replace_n = min(len(text), max(remaining, 0))
+        if replace_n:
+            cursor.movePosition(
+                QTextCursor.MoveOperation.Right,
+                QTextCursor.MoveMode.KeepAnchor,
+                n=replace_n,
+            )
+            cursor.removeSelectedText()
+        cursor.setCharFormat(fmt)
+        cursor.insertText(text)
+        self._line_col = col + len(text)
+        self.setTextCursor(cursor)
+        self.ensureCursorVisible()
+
+    def _carriage_return(self) -> None:
+        # Only affects the current (last) line — keeps history intact.
+        self._line_col = 0
+        cursor = self._last_block_cursor()
+        block = cursor.block()
+        cursor.setPosition(block.position())
+        self.setTextCursor(cursor)
+
+    def _backspace(self) -> None:
+        col = getattr(self, "_line_col", 0)
+        if col <= 0:
+            return
+        cursor = self._last_block_cursor()
+        block = cursor.block()
+        cursor.setPosition(block.position() + col)
+        cursor.deletePreviousChar()
+        self._line_col = col - 1
+        self.setTextCursor(cursor)
+
+    def _erase_in_last_line(self, mode: int) -> None:
+        cursor = self._last_block_cursor()
+        block = cursor.block()
+        col = getattr(self, "_line_col", len(block.text()))
+        col = max(0, min(col, len(block.text())))
+        if mode == 1:
+            cursor.setPosition(block.position())
+            cursor.setPosition(block.position() + col, QTextCursor.MoveMode.KeepAnchor)
+            cursor.removeSelectedText()
+            self._line_col = 0
+        elif mode == 2:
+            cursor.setPosition(block.position())
+            cursor.movePosition(QTextCursor.MoveOperation.EndOfBlock, QTextCursor.MoveMode.KeepAnchor)
+            cursor.removeSelectedText()
+            self._line_col = 0
+        else:
+            cursor.setPosition(block.position() + col)
+            cursor.movePosition(QTextCursor.MoveOperation.EndOfBlock, QTextCursor.MoveMode.KeepAnchor)
+            cursor.removeSelectedText()
+        self.setTextCursor(cursor)
+
+    def _move_in_last_line(self, col: int) -> None:
+        cursor = self._last_block_cursor()
+        block = cursor.block()
+        target = min(max(col - 1, 0), len(block.text()))
+        self._line_col = target
+        cursor.setPosition(block.position() + target)
+        self.setTextCursor(cursor)
+
+    def _nudge_in_last_line(self, delta: int) -> None:
+        cursor = self._last_block_cursor()
+        block = cursor.block()
+        col = getattr(self, "_line_col", len(block.text()))
+        col = max(0, min(col + delta, len(block.text())))
+        self._line_col = col
+        cursor.setPosition(block.position() + col)
+        self.setTextCursor(cursor)
+
+
+class UpdateConsoleWindow(QMainWindow):
+    def __init__(self) -> None:
+        super().__init__()
+        self.setWindowTitle(window_title())
+        self._session: PtySession | None = None
+        self._awaiting_exit = False
+
+        central = QWidget(self)
+        layout = QVBoxLayout(central)
+        layout.setContentsMargins(0, 0, 0, 0)
+        self.view = ConsoleView(central)
+        layout.addWidget(self.view)
+        self.setCentralWidget(central)
+        self.setStyleSheet(f"QMainWindow {{ background-color: {DEFAULT_BG}; }}")
+
+        self.view.input_bytes.connect(self._on_input)
+        QTimer.singleShot(0, self._start_session)
+
+    def showEvent(self, event) -> None:  # noqa: N802
+        super().showEvent(event)
+        self.showMaximized()
+        self.view.setFocus(Qt.FocusReason.ActiveWindowFocusReason)
+
+    def closeEvent(self, event) -> None:  # noqa: N802
+        if self._session is not None:
+            self._session.terminate()
+        super().closeEvent(event)
+
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        self._sync_winsize()
+
+    def _start_session(self) -> None:
+        argv = ["/usr/bin/pkexec", UPDATE_SYSTEM, "--root"]
+        if not os.path.isfile(UPDATE_SYSTEM):
+            # Dev / unpackaged fallback
+            here = os.path.abspath(os.path.join(os.path.dirname(__file__), "update-system"))
+            if os.path.isfile(here):
+                argv = ["/usr/bin/pkexec", here, "--root"]
+        self._session = PtySession(argv, self)
+        self._session.output.connect(self.view.feed)
+        self._session.exited.connect(self._on_exited)
+        self._sync_winsize()
+
+    def _sync_winsize(self) -> None:
+        if self._session is None:
+            return
+        metrics = self.view.fontMetrics()
+        char_w = max(metrics.horizontalAdvance("M"), 1)
+        char_h = max(metrics.lineSpacing(), 1)
+        cols = max(int(self.view.viewport().width() / char_w), 20)
+        rows = max(int(self.view.viewport().height() / char_h), 5)
+        self._session.set_winsize(rows, cols)
+
+    def _on_input(self, data: bytes) -> None:
+        if self._awaiting_exit:
+            if b"\r" in data or b"\n" in data:
+                self.close()
+            return
+        if self._session is not None:
+            self._session.write(data)
+
+    def _poll_update_viewer(self) -> None:
+        try:
+            import subprocess
+
+            subprocess.run(
+                [
+                    "timeout",
+                    "3",
+                    "dbus-send",
+                    "--session",
+                    "--type=method_call",
+                    "--dest=org.updateViewer",
+                    "/org/updateViewer",
+                    "org.updateViewer.Manager.poll_updates",
+                ],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=False,
+            )
+        except Exception:
+            pass
+
+    def _on_exited(self, code: int) -> None:
+        # --root ends after the upgrade; prompt locally (like wait_for_enter).
+        self._poll_update_viewer()
+        lang = detect_ui_lang()
+        if code != 0:
+            err = (
+                f"\n[update-console] processo terminou com código {code}\n"
+                if lang == "pt"
+                else f"\n[update-console] process exited with code {code}\n"
+            )
+            self.view.feed(err.encode("utf-8"))
+        msg = (
+            "\nPressione ENTER para sair…\n"
+            if lang == "pt"
+            else "\nPress ENTER to exit…\n"
+        )
+        self.view.feed(msg.encode("utf-8"))
+        self._awaiting_exit = True
+
+
+def main() -> int:
+    try:
+        locale.setlocale(locale.LC_ALL, "")
+    except locale.Error:
+        pass
+
+    # Avoid gettext domain hard dependency if locales are missing.
+    gettext.install("update-viewer", localedir="/usr/share/locale")
+
+    app = QApplication(sys.argv)
+    app.setApplicationName("update-console")
+    window = UpdateConsoleWindow()
+    window.show()
+    return app.exec()
+
+
+if __name__ == "__main__":
+    sys.exit(main())

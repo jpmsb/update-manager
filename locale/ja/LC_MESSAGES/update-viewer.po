@@ -569,6 +569,19 @@ msgstr "<a href='{}'>Package Update Indicator</a> に触発されました"
 msgid "Erro ao obter repositórios: {}"
 msgstr "リポジトリの取得エラー: {}"
 
+msgid "Erro ao atualizar"
+msgstr "更新エラー"
+
+msgid "Não foi possível iniciar o atualizador do sistema."
+msgstr "システムのアップデーターを起動できませんでした。"
+
+msgid ""
+"Não foi possível iniciar o atualizador do sistema.\n"
+"Verifique o comando em Configurações (padrão: /usr/bin/update-system)."
+msgstr ""
+"システムのアップデーターを起動できませんでした。\n"
+"設定のコマンドを確認してください（既定: /usr/bin/update-system）。"
+
 #~ msgid ""
 #~ "Inspirado no <a href='https://code.guido-berhoerster.org/projects/package-"
 #~ "update-indicator/'>Package Update Indicator</a>"

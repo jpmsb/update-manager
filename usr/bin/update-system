@@ -8,13 +8,27 @@ PACKAGE_NAME="update-manager"
 ZYPPER_UPGRADE=(/usr/bin/zypper dist-upgrade --auto-agree-with-licenses --replacefiles --force-resolution)
 
 detect_ui_lang() {
-    local lang="${LC_ALL:-${LC_MESSAGES:-${LANG:-en_US.UTF-8}}}"
-    lang="${lang%%.*}"
-    lang="${lang%%_*}"
-    lang=$(echo "$lang" | tr '[:upper:]' '[:lower:]')
-    case "$lang" in
-        pt) echo "pt" ;;
-        *) echo "en" ;;
+    # Align with update-viewer: en, pt, es, de, ja
+    local raw="${LC_ALL:-${LC_MESSAGES:-${LANG:-en_US.UTF-8}}}"
+    raw="${raw%%.*}"
+    local full
+    full=$(echo "$raw" | tr '[:upper:]' '[:lower:]')
+    local lang="${full%%_*}"
+    case "$full" in
+        pt|pt_br|pt_pt) echo "pt" ;;
+        es|es_es|es_mx) echo "es" ;;
+        de|de_de|de_at|de_ch) echo "de" ;;
+        ja|ja_jp) echo "ja" ;;
+        en|en_us|en_gb) echo "en" ;;
+        *)
+            case "$lang" in
+                pt) echo "pt" ;;
+                es) echo "es" ;;
+                de) echo "de" ;;
+                ja) echo "ja" ;;
+                *) echo "en" ;;
+            esac
+            ;;
     esac
 }
 
@@ -46,6 +60,81 @@ msg() {
         pt:something_wrong) echo "Algo deu errado. Você pode tentar novamente." ;;
         pt:press_enter) echo "Pressione ENTER para sair…" ;;
         pt:must_be_root) echo "Este modo requer root." ;;
+        pt:no_console) echo "Não foi possível abrir o console de atualização (update-console). Verifique se o pacote update-manager está instalado e se a sessão gráfica está ativa." ;;
+        pt:usage) echo "Uso: update-system [--help]
+       atualizar-sistema [--help]
+
+Inicia a atualização do sistema (zypper dist-upgrade) com elevação de privilégios.
+Em sessão gráfica, abre o console próprio (update-console)." ;;
+
+        es:terminal_title) echo "Instalar actualizaciones" ;;
+        es:phase_self) echo "update-manager" ;;
+        es:checking_self) echo "Consultando GitHub…" ;;
+        es:self_updating) echo "Nueva versión disponible" ;;
+        es:self_installing) echo "Instalando" ;;
+        es:self_ok) echo "Actualizado" ;;
+        es:self_fail) echo "Error al actualizar; continuando con el sistema" ;;
+        es:phase_repos) echo "Repositorios" ;;
+        es:refreshing_repos) echo "Actualizando metadatos…" ;;
+        es:repos_done) echo "Metadatos actualizados" ;;
+        es:repo_fail) echo "Error al actualizar metadatos" ;;
+        es:phase_upgrade) echo "Sistema" ;;
+        es:proceeding) echo "zypper dist-upgrade — revise y confirme" ;;
+        es:something_wrong) echo "Algo salió mal. Puede intentarlo de nuevo." ;;
+        es:press_enter) echo "Pulse ENTER para salir…" ;;
+        es:must_be_root) echo "Este modo requiere root." ;;
+        es:no_console) echo "No se pudo abrir la consola de actualización (update-console). Compruebe que el paquete update-manager esté instalado y que la sesión gráfica esté activa." ;;
+        es:usage) echo "Uso: update-system [--help]
+       atualizar-sistema [--help]
+
+Inicia la actualización del sistema (zypper dist-upgrade) con elevación de privilegios.
+En sesión gráfica, abre la consola integrada (update-console)." ;;
+
+        de:terminal_title) echo "Aktualisierungen installieren" ;;
+        de:phase_self) echo "update-manager" ;;
+        de:checking_self) echo "GitHub wird abgefragt…" ;;
+        de:self_updating) echo "Neue Version verfügbar" ;;
+        de:self_installing) echo "Installation" ;;
+        de:self_ok) echo "Aktualisiert" ;;
+        de:self_fail) echo "Aktualisierung fehlgeschlagen; Systemaktualisierung wird fortgesetzt" ;;
+        de:phase_repos) echo "Repositories" ;;
+        de:refreshing_repos) echo "Metadaten werden aktualisiert…" ;;
+        de:repos_done) echo "Metadaten aktualisiert" ;;
+        de:repo_fail) echo "Metadaten konnten nicht aktualisiert werden" ;;
+        de:phase_upgrade) echo "System" ;;
+        de:proceeding) echo "zypper dist-upgrade — prüfen und bestätigen" ;;
+        de:something_wrong) echo "Etwas ist schiefgelaufen. Sie können es erneut versuchen." ;;
+        de:press_enter) echo "Drücken Sie ENTER zum Beenden…" ;;
+        de:must_be_root) echo "Dieser Modus erfordert root." ;;
+        de:no_console) echo "Die Update-Konsole (update-console) konnte nicht geöffnet werden. Prüfen Sie, ob das Paket update-manager installiert ist und eine grafische Sitzung aktiv ist." ;;
+        de:usage) echo "Aufruf: update-system [--help]
+       atualizar-sistema [--help]
+
+Startet eine privilegierte Systemaktualisierung (zypper dist-upgrade).
+In einer grafischen Sitzung wird die eigene Konsole (update-console) geöffnet." ;;
+
+        ja:terminal_title) echo "更新をインストール" ;;
+        ja:phase_self) echo "update-manager" ;;
+        ja:checking_self) echo "GitHub を確認しています…" ;;
+        ja:self_updating) echo "新しいバージョンがあります" ;;
+        ja:self_installing) echo "インストール中" ;;
+        ja:self_ok) echo "更新しました" ;;
+        ja:self_fail) echo "更新に失敗しました。システムの更新を続行します" ;;
+        ja:phase_repos) echo "リポジトリ" ;;
+        ja:refreshing_repos) echo "メタデータを更新しています…" ;;
+        ja:repos_done) echo "メタデータを更新しました" ;;
+        ja:repo_fail) echo "メタデータの更新に失敗しました" ;;
+        ja:phase_upgrade) echo "システム" ;;
+        ja:proceeding) echo "zypper dist-upgrade — 内容を確認して続行してください" ;;
+        ja:something_wrong) echo "問題が発生しました。もう一度お試しください。" ;;
+        ja:press_enter) echo "終了するには ENTER を押してください…" ;;
+        ja:must_be_root) echo "このモードには root が必要です。" ;;
+        ja:no_console) echo "更新コンソール（update-console）を開けませんでした。update-manager パッケージがインストールされているか、グラフィカルセッションが有効かを確認してください。" ;;
+        ja:usage) echo "使い方: update-system [--help]
+       atualizar-sistema [--help]
+
+特権付きでシステム更新（zypper dist-upgrade）を開始します。
+グラフィカルセッションでは内蔵コンソール（update-console）を開きます。" ;;
 
         *:terminal_title) echo "Install updates" ;;
         *:phase_self) echo "update-manager" ;;
@@ -63,6 +152,12 @@ msg() {
         *:something_wrong) echo "Something went wrong. You can try again." ;;
         *:press_enter) echo "Press ENTER to exit…" ;;
         *:must_be_root) echo "This mode requires root." ;;
+        *:no_console) echo "Could not open the update console (update-console). Ensure the update-manager package is installed and a graphical session is active." ;;
+        *:usage) echo "Usage: update-system [--help]
+       atualizar-sistema [--help]
+
+Starts a privileged system upgrade (zypper dist-upgrade).
+On a graphical session, opens the built-in console (update-console)." ;;
         *) echo "$key" ;;
     esac
 }
@@ -366,6 +461,83 @@ wait_for_enter() {
     fi
 }
 
+print_usage() {
+    msg usage
+}
+
+poll_update_viewer() {
+    timeout 3 dbus-send --session --type=method_call \
+        --dest=org.updateViewer /org/updateViewer \
+        org.updateViewer.Manager.poll_updates >/dev/null 2>&1 || true
+}
+
+resolve_script_path() {
+    local p="$0"
+    if command -v readlink >/dev/null 2>&1; then
+        local resolved
+        resolved="$(readlink -f "$p" 2>/dev/null || true)"
+        if [ -n "$resolved" ]; then
+            printf '%s\n' "$resolved"
+            return 0
+        fi
+    fi
+    if command -v realpath >/dev/null 2>&1; then
+        local resolved
+        resolved="$(realpath "$p" 2>/dev/null || true)"
+        if [ -n "$resolved" ]; then
+            printf '%s\n' "$resolved"
+            return 0
+        fi
+    fi
+    case "$p" in
+        /*) printf '%s\n' "$p" ;;
+        *) printf '%s\n' "$(pwd)/$p" ;;
+    esac
+}
+
+notify_no_console() {
+    local message
+    message="$(msg no_console)"
+    echo "$message" >&2
+    if command -v zenity >/dev/null 2>&1; then
+        zenity --error --no-wrap --text="$message" 2>/dev/null || true
+    elif command -v kdialog >/dev/null 2>&1; then
+        kdialog --error "$message" 2>/dev/null || true
+    elif command -v notify-send >/dev/null 2>&1; then
+        notify-send "$(msg terminal_title)" "$message" 2>/dev/null || true
+    fi
+}
+
+find_update_console() {
+    if [ -x /usr/bin/update-console ]; then
+        printf '%s\n' /usr/bin/update-console
+        return 0
+    fi
+    # Dev / unpackaged layout: console beside this script
+    local script_dir
+    script_dir="$(CDPATH= cd -- "$(dirname -- "$(resolve_script_path)")" && pwd)"
+    if [ -x "$script_dir/update-console" ]; then
+        printf '%s\n' "$script_dir/update-console"
+        return 0
+    fi
+    return 1
+}
+
+open_update_console() {
+    local console
+    if ! console="$(find_update_console)"; then
+        notify_no_console
+        return 1
+    fi
+    "$console"
+}
+
+run_interactive_upgrade() {
+    "$RUN_PRIVILEGED" "$0" --root
+    wait_for_enter
+    poll_update_viewer
+}
+
 if [ -n "${DISPLAY:-}" ] && [ -z "${SSH_CONNECTION:-}" ] && [ -z "${SSH_CLIENT:-}" ] && [ -z "${SSH_TTY:-}" ]; then
     RUN_PRIVILEGED="/usr/bin/pkexec"
 else
@@ -376,29 +548,22 @@ case "${1:-}" in
     --root)
         run_as_root
         ;;
+    --launch)
+        run_interactive_upgrade
+        ;;
+    -h|--help)
+        print_usage
+        exit 0
+        ;;
     "")
         if [ "$RUN_PRIVILEGED" = "/usr/bin/pkexec" ]; then
-            /usr/bin/xfce4-terminal \
-                --hide-menubar \
-                --hide-toolbar \
-                --zoom 1.5 \
-                --maximize \
-                -e "$0 0" \
-                -T "$(msg terminal_title)" \
-                >/dev/null 2>&1 & disown
+            open_update_console
         else
-            "$RUN_PRIVILEGED" "$0" --root
-            wait_for_enter
-            timeout 3 dbus-send --session --type=method_call \
-                --dest=org.updateViewer /org/updateViewer \
-                org.updateViewer.Manager.poll_updates >/dev/null 2>&1 || true
+            run_interactive_upgrade
         fi
         ;;
     *)
-        "$RUN_PRIVILEGED" "$0" --root
-        wait_for_enter
-        timeout 3 dbus-send --session --type=method_call \
-            --dest=org.updateViewer /org/updateViewer \
-            org.updateViewer.Manager.poll_updates >/dev/null 2>&1 || true
+        print_usage >&2
+        exit 2
         ;;
 esac

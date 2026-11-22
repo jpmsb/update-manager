@@ -55,6 +55,7 @@ msg() {
         pt:refreshing_repos) echo "Atualizando metadados…" ;;
         pt:repos_done) echo "Metadados atualizados" ;;
         pt:repo_fail) echo "Falha ao atualizar metadados" ;;
+        pt:expired_key_removed) echo "Chave GPG expirada removida para renovação" ;;
         pt:phase_upgrade) echo "Sistema" ;;
         pt:proceeding) echo "zypper dist-upgrade — revise e confirme" ;;
         pt:something_wrong) echo "Algo deu errado. Você pode tentar novamente." ;;
@@ -78,6 +79,7 @@ Em sessão gráfica, abre o console próprio (update-console)." ;;
         es:refreshing_repos) echo "Actualizando metadatos…" ;;
         es:repos_done) echo "Metadatos actualizados" ;;
         es:repo_fail) echo "Error al actualizar metadatos" ;;
+        es:expired_key_removed) echo "Clave GPG caducada eliminada para renovación" ;;
         es:phase_upgrade) echo "Sistema" ;;
         es:proceeding) echo "zypper dist-upgrade — revise y confirme" ;;
         es:something_wrong) echo "Algo salió mal. Puede intentarlo de nuevo." ;;
@@ -101,6 +103,7 @@ En sesión gráfica, abre la consola integrada (update-console)." ;;
         de:refreshing_repos) echo "Metadaten werden aktualisiert…" ;;
         de:repos_done) echo "Metadaten aktualisiert" ;;
         de:repo_fail) echo "Metadaten konnten nicht aktualisiert werden" ;;
+        de:expired_key_removed) echo "Abgelaufener GPG-Schlüssel zur Erneuerung entfernt" ;;
         de:phase_upgrade) echo "System" ;;
         de:proceeding) echo "zypper dist-upgrade — prüfen und bestätigen" ;;
         de:something_wrong) echo "Etwas ist schiefgelaufen. Sie können es erneut versuchen." ;;
@@ -124,6 +127,7 @@ In einer grafischen Sitzung wird die eigene Konsole (update-console) geöffnet."
         ja:refreshing_repos) echo "メタデータを更新しています…" ;;
         ja:repos_done) echo "メタデータを更新しました" ;;
         ja:repo_fail) echo "メタデータの更新に失敗しました" ;;
+        ja:expired_key_removed) echo "更新のため期限切れの GPG 鍵を削除しました" ;;
         ja:phase_upgrade) echo "システム" ;;
         ja:proceeding) echo "zypper dist-upgrade — 内容を確認して続行してください" ;;
         ja:something_wrong) echo "問題が発生しました。もう一度お試しください。" ;;
@@ -147,6 +151,7 @@ In einer grafischen Sitzung wird die eigene Konsole (update-console) geöffnet."
         *:refreshing_repos) echo "Refreshing metadata…" ;;
         *:repos_done) echo "Metadata refreshed" ;;
         *:repo_fail) echo "Failed to refresh metadata" ;;
+        *:expired_key_removed) echo "Expired GPG key removed for renewal" ;;
         *:phase_upgrade) echo "System" ;;
         *:proceeding) echo "zypper dist-upgrade — review and confirm" ;;
         *:something_wrong) echo "Something went wrong. You can try again." ;;
@@ -357,14 +362,50 @@ print(url)
     rm -f "$tmp_rpm"
 }
 
+EXPIRED_KEYS_REMOVED=0
+
+cleanup_expired_rpm_keys() {
+    EXPIRED_KEYS_REMOVED=0
+    command -v gpg >/dev/null 2>&1 || return 0
+
+    local now gpg_home key exp_info summary
+    now=$(date +%s)
+    gpg_home=$(mktemp -d /tmp/update-system-gpg-XXXXXX)
+    chmod 700 "$gpg_home"
+
+    while IFS= read -r key; do
+        [ -z "$key" ] && continue
+        exp_info=$(
+            rpm -q --qf '%{DESCRIPTION}\n' "$key" 2>/dev/null \
+                | gpg --homedir "$gpg_home" --with-colons --show-keys 2>/dev/null \
+                | awk -F: -v now="$now" '$1=="pub" && ($2=="e" || ($7!="" && $7>0 && $7<=now)) {print $2, $7; exit}' \
+                || true
+        )
+        if [ -n "$exp_info" ]; then
+            summary=$(rpm -q --qf '%{SUMMARY}\n' "$key" 2>/dev/null || echo "$key")
+            if rpm --erase --allmatches "$key" 2>/dev/null; then
+                warn "$(msg expired_key_removed): $summary"
+                EXPIRED_KEYS_REMOVED=1
+            fi
+        fi
+    done < <(rpm -q gpg-pubkey --qf '%{NAME}-%{VERSION}-%{RELEASE}\n' 2>/dev/null || true)
+
+    rm -rf "$gpg_home"
+}
+
 refresh_repos() {
     local -a repos=()
+    local -a refresh_args=(--gpg-auto-import-keys -n refresh)
     local alias=""
     local i=0
     local total=0
     local rc=0
 
     phase "$(msg phase_repos)"
+    cleanup_expired_rpm_keys
+    if [ "$EXPIRED_KEYS_REMOVED" -eq 1 ]; then
+        refresh_args+=(-f)
+    fi
     info "$(msg refreshing_repos)"
 
     clear_zypp_lock
@@ -383,7 +424,7 @@ refresh_repos() {
         start_spin "$(msg refreshing_repos)"
         clear_zypp_lock
         set +e
-        /usr/bin/zypper --gpg-auto-import-keys -n refresh >/dev/null 2>&1
+        /usr/bin/zypper "${refresh_args[@]}" >/dev/null 2>&1
         set -e
         stop_spin
         ok "$(msg repos_done)"
@@ -395,7 +436,7 @@ refresh_repos() {
         draw_progress "$i" "$total" "$alias"
         clear_zypp_lock
         set +e
-        /usr/bin/zypper --gpg-auto-import-keys -n refresh "$alias" >/dev/null 2>&1
+        /usr/bin/zypper "${refresh_args[@]}" "$alias" >/dev/null 2>&1
         rc=$?
         set -e
         if [ "$rc" -ne 0 ]; then

@@ -58,6 +58,7 @@ MESSAGES = {
         "btn_cancel": "Clear (Backspace)",
         "ctx_copy": "Copy",
         "ctx_paste": "Paste",
+        "scroll_bottom": "Scroll to bottom",
     },
     "pt": {
         "window_title": "Instalar atualizações",
@@ -82,6 +83,7 @@ MESSAGES = {
         "btn_cancel": "Anular (Backspace)",
         "ctx_copy": "Copiar",
         "ctx_paste": "Colar",
+        "scroll_bottom": "Rolar para o fim",
     },
     "es": {
         "window_title": "Instalar actualizaciones",
@@ -106,6 +108,7 @@ MESSAGES = {
         "btn_cancel": "Anular (Backspace)",
         "ctx_copy": "Copiar",
         "ctx_paste": "Pegar",
+        "scroll_bottom": "Desplazar hasta el final",
     },
     "de": {
         "window_title": "Aktualisierungen installieren",
@@ -130,6 +133,7 @@ MESSAGES = {
         "btn_cancel": "Verwerfen (Backspace)",
         "ctx_copy": "Kopieren",
         "ctx_paste": "Einfügen",
+        "scroll_bottom": "Nach unten scrollen",
     },
     "ja": {
         "window_title": "更新をインストール",
@@ -154,6 +158,7 @@ MESSAGES = {
         "btn_cancel": "取り消す (Backspace)",
         "ctx_copy": "コピー",
         "ctx_paste": "貼り付け",
+        "scroll_bottom": "一番下へスクロール",
     },
 }
 
@@ -541,6 +546,32 @@ class ConsoleView(QPlainTextEdit):
         self._btn_container.setStyleSheet(self._button_qss)
         self.verticalScrollBar().valueChanged.connect(self._reposition_prompt_buttons)
 
+        self._scroll_bottom_btn = QPushButton("↓", self.viewport())
+        self._scroll_bottom_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self._scroll_bottom_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._scroll_bottom_btn.setToolTip(tr("scroll_bottom"))
+        self._scroll_bottom_btn.setFixedSize(36, 36)
+        self._scroll_bottom_btn.setStyleSheet(
+            """
+            QPushButton {
+                background-color: rgba(36, 41, 47, 230);
+                color: #79c0ff;
+                border: 1px solid #444c56;
+                border-radius: 18px;
+                font-size: 16pt;
+                font-weight: bold;
+                padding: 0px;
+            }
+            QPushButton:hover {
+                background-color: #323942;
+                color: #a5d6ff;
+                border-color: #58a6ff;
+            }
+            """
+        )
+        self._scroll_bottom_btn.clicked.connect(self._scroll_to_bottom)
+        self._scroll_bottom_btn.setVisible(False)
+
         self.setStyleSheet(
             f"""
             QPlainTextEdit {{
@@ -557,6 +588,7 @@ class ConsoleView(QPlainTextEdit):
     def resizeEvent(self, event) -> None:  # noqa: N802
         super().resizeEvent(event)
         self._reposition_prompt_buttons()
+        self._position_scroll_bottom_button()
 
     def _restyle_prompt_chips(self) -> None:
         selected_opt = (
@@ -672,14 +704,10 @@ class ConsoleView(QPlainTextEdit):
         for block_num, start_col, btn_label, opt_key in reversed(help_entries):
             hblock = doc.findBlockByNumber(block_num)
             if hblock.isValid():
-                saved_pos = self.textCursor().position()
                 rcur = QTextCursor(hblock)
                 rcur.setPosition(hblock.position() + start_col)
                 rcur.setPosition(hblock.position() + start_col + len(btn_label), QTextCursor.MoveMode.KeepAnchor)
                 rcur.insertText(" " * len(btn_label))
-                restore = QTextCursor(doc)
-                restore.setPosition(min(saved_pos, len(doc.toPlainText())))
-                self.setTextCursor(restore)
 
             hbtn = QPushButton(btn_label, self.viewport())
             hbtn.setFont(pick_mono_font(self._font_size))
@@ -694,7 +722,8 @@ class ConsoleView(QPlainTextEdit):
 
         self._btn_container.setVisible(True)
         self._reposition_prompt_buttons()
-        self.ensureCursorVisible()
+        if self._follow_tail:
+            self.ensureCursorVisible()
 
     def _clear_help_highlight(self) -> None:
         if self._highlighted_help_span is None:
@@ -713,8 +742,9 @@ class ConsoleView(QPlainTextEdit):
             cur.setCharFormat(fmt)
 
     def _restore_help_buttons(self, chosen_opt: str | None = None) -> None:
+        if not self._help_buttons:
+            return
         doc = self.document()
-        saved_pos = self.textCursor().position()
         for block_num, start_col, orig_label, hbtn in self._help_buttons:
             opt_key = hbtn.property("optKey")
             hbtn.setVisible(False)
@@ -737,9 +767,8 @@ class ConsoleView(QPlainTextEdit):
                     rcur.setCharFormat(hl_fmt)
                     self._highlighted_help_span = (block_num, start_col, len(orig_label))
         self._help_buttons.clear()
-        restore = QTextCursor(doc)
-        restore.setPosition(min(saved_pos, len(doc.toPlainText())))
-        self.setTextCursor(restore)
+        if self._follow_tail:
+            self._snap_cursor_to_input()
 
     def _clear_prompt_buttons(self) -> None:
         self._btn_container.setVisible(False)
@@ -778,7 +807,8 @@ class ConsoleView(QPlainTextEdit):
 
         self._btn_container.setVisible(True)
         self._reposition_prompt_buttons()
-        self.ensureCursorVisible()
+        if self._follow_tail:
+            self.ensureCursorVisible()
 
     def clear_inline_prompt_links(self) -> None:
         """Hide and remove inline prompt buttons and restore masked help-line labels."""
@@ -804,7 +834,7 @@ class ConsoleView(QPlainTextEdit):
 
     def mouseReleaseEvent(self, event) -> None:  # noqa: N802
         super().mouseReleaseEvent(event)
-        if not self.textCursor().hasSelection():
+        if not self.textCursor().hasSelection() and self._follow_tail:
             self._snap_cursor_to_input()
 
     def _paste_from_clipboard(self) -> None:
@@ -907,6 +937,7 @@ class ConsoleView(QPlainTextEdit):
                 self._restyle_prompt_chips()
                 return
             if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter) and self._selected_opt_idx is not None:
+                self._scroll_to_bottom()
                 opt = self._active_options[self._selected_opt_idx]
                 if opt == "__confirm__":
                     self.prompt_confirm_clicked.emit()
@@ -949,6 +980,7 @@ class ConsoleView(QPlainTextEdit):
             self.input_bytes.emit(b"\x7f")
             return
         if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            self._scroll_to_bottom()
             self._snap_cursor_to_input()
             self.input_bytes.emit(b"\r")
             return
@@ -967,6 +999,32 @@ class ConsoleView(QPlainTextEdit):
             return
         return
 
+    def _position_scroll_bottom_button(self) -> None:
+        vp = self.viewport()
+        margin = 14
+        x = max(margin, vp.width() - self._scroll_bottom_btn.width() - margin)
+        y = max(margin, vp.height() - self._scroll_bottom_btn.height() - margin)
+        self._scroll_bottom_btn.move(x, y)
+        self._scroll_bottom_btn.raise_()
+
+    def _update_scroll_bottom_button(self) -> None:
+        vbar = self.verticalScrollBar()
+        should_show = (not self._follow_tail) and vbar.maximum() > 0
+        if should_show != self._scroll_bottom_btn.isVisible():
+            self._scroll_bottom_btn.setVisible(should_show)
+        if should_show:
+            self._position_scroll_bottom_button()
+
+    def _scroll_to_bottom(self) -> None:
+        self._follow_tail = True
+        self._updating_scroll = True
+        try:
+            vbar = self.verticalScrollBar()
+            vbar.setValue(vbar.maximum())
+        finally:
+            self._updating_scroll = False
+        self._update_scroll_bottom_button()
+
     def _is_at_bottom(self) -> bool:
         vbar = self.verticalScrollBar()
         return vbar.value() >= max(0, vbar.maximum() - 2)
@@ -974,6 +1032,7 @@ class ConsoleView(QPlainTextEdit):
     def _on_scroll_changed(self, _value: int) -> None:
         if not self._updating_scroll:
             self._follow_tail = self._is_at_bottom()
+        self._update_scroll_bottom_button()
 
     def _on_range_changed(self, _min: int, max_val: int) -> None:
         if self._follow_tail:
@@ -982,6 +1041,7 @@ class ConsoleView(QPlainTextEdit):
                 self.verticalScrollBar().setValue(max_val)
             finally:
                 self._updating_scroll = False
+        self._update_scroll_bottom_button()
 
     def feed(self, data: bytes) -> None:
         if self._utf8_pending:

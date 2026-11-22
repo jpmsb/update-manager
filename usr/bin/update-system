@@ -529,7 +529,8 @@ open_update_console() {
         notify_no_console
         return 1
     fi
-    "$console"
+    "$console" </dev/null >/dev/null 2>&1 &
+    disown
 }
 
 run_interactive_upgrade() {

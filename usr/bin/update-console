@@ -8,7 +8,9 @@ import fcntl
 import locale
 import os
 import pty
+import re
 import select
+import shutil
 import signal
 import struct
 import subprocess
@@ -16,8 +18,17 @@ import sys
 import termios
 
 from PyQt6.QtCore import Qt, QSocketNotifier, QTimer, pyqtSignal, QObject
-from PyQt6.QtGui import QColor, QFont, QFontDatabase, QKeyEvent, QTextCharFormat, QTextCursor
-from PyQt6.QtWidgets import QApplication, QMainWindow, QPlainTextEdit, QVBoxLayout, QWidget
+from PyQt6.QtGui import QColor, QFont, QFontDatabase, QIcon, QKeyEvent, QTextCharFormat, QTextCursor
+from PyQt6.QtWidgets import (
+    QApplication,
+    QHBoxLayout,
+    QMainWindow,
+    QPlainTextEdit,
+    QPushButton,
+    QStyle,
+    QVBoxLayout,
+    QWidget,
+)
 
 UPDATE_SYSTEM = "/usr/bin/update-system"
 
@@ -27,26 +38,111 @@ MESSAGES = {
         "window_title": "Install updates",
         "press_enter": "\nPress ENTER to exit…\n",
         "process_exited": "\n[update-console] process exited with code {code}\n",
+        "prompt_notify": "Action required: {question}",
+        "opt_yes": "Yes",
+        "opt_no": "No",
+        "opt_view": "View details",
+        "opt_details": "Details",
+        "opt_cancel": "Cancel",
+        "opt_skip": "Skip",
+        "opt_abort": "Abort",
+        "opt_retry": "Retry",
+        "opt_ignore": "Ignore",
+        "opt_reject": "Reject",
+        "opt_trust_temp": "Trust once",
+        "opt_trust_always": "Trust always",
+        "opt_all": "All options",
+        "opt_solution": "Solution {n}",
+        "btn_confirm": "Confirm (Enter)",
+        "btn_cancel": "Clear (Backspace)",
     },
     "pt": {
         "window_title": "Instalar atualizações",
         "press_enter": "\nPressione ENTER para sair…\n",
         "process_exited": "\n[update-console] processo terminou com código {code}\n",
+        "prompt_notify": "Ação necessária: {question}",
+        "opt_yes": "Sim",
+        "opt_no": "Não",
+        "opt_view": "Ver detalhes",
+        "opt_details": "Detalhes",
+        "opt_cancel": "Cancelar",
+        "opt_skip": "Pular",
+        "opt_abort": "Abortar",
+        "opt_retry": "Tentar novamente",
+        "opt_ignore": "Ignorar",
+        "opt_reject": "Rejeitar",
+        "opt_trust_temp": "Confiar agora",
+        "opt_trust_always": "Confiar sempre",
+        "opt_all": "Ver todas as opções",
+        "opt_solution": "Solução {n}",
+        "btn_confirm": "Confirmar (Enter)",
+        "btn_cancel": "Anular (Backspace)",
     },
     "es": {
         "window_title": "Instalar actualizaciones",
         "press_enter": "\nPulse ENTER para salir…\n",
         "process_exited": "\n[update-console] el proceso terminó con código {code}\n",
+        "prompt_notify": "Acción requerida: {question}",
+        "opt_yes": "Sí",
+        "opt_no": "No",
+        "opt_view": "Ver detalles",
+        "opt_details": "Detalles",
+        "opt_cancel": "Cancelar",
+        "opt_skip": "Omitir",
+        "opt_abort": "Abortar",
+        "opt_retry": "Reintentar",
+        "opt_ignore": "Ignorar",
+        "opt_reject": "Rechazar",
+        "opt_trust_temp": "Confiar ahora",
+        "opt_trust_always": "Confiar siempre",
+        "opt_all": "Ver todas las opciones",
+        "opt_solution": "Solución {n}",
+        "btn_confirm": "Confirmar (Enter)",
+        "btn_cancel": "Anular (Backspace)",
     },
     "de": {
         "window_title": "Aktualisierungen installieren",
         "press_enter": "\nDrücken Sie ENTER zum Beenden…\n",
         "process_exited": "\n[update-console] Prozess beendet mit Code {code}\n",
+        "prompt_notify": "Aktion erforderlich: {question}",
+        "opt_yes": "Ja",
+        "opt_no": "Nein",
+        "opt_view": "Details anzeigen",
+        "opt_details": "Details",
+        "opt_cancel": "Abbrechen",
+        "opt_skip": "Überspringen",
+        "opt_abort": "Abbrechen",
+        "opt_retry": "Erneut versuchen",
+        "opt_ignore": "Ignorieren",
+        "opt_reject": "Ablehnen",
+        "opt_trust_temp": "Einmal vertrauen",
+        "opt_trust_always": "Immer vertrauen",
+        "opt_all": "Alle Optionen",
+        "opt_solution": "Lösung {n}",
+        "btn_confirm": "Bestätigen (Enter)",
+        "btn_cancel": "Verwerfen (Backspace)",
     },
     "ja": {
         "window_title": "更新をインストール",
         "press_enter": "\n終了するには ENTER を押してください…\n",
         "process_exited": "\n[update-console] プロセスはコード {code} で終了しました\n",
+        "prompt_notify": "操作が必要です: {question}",
+        "opt_yes": "はい",
+        "opt_no": "いいえ",
+        "opt_view": "詳細を表示",
+        "opt_details": "詳細",
+        "opt_cancel": "キャンセル",
+        "opt_skip": "スキップ",
+        "opt_abort": "中止",
+        "opt_retry": "再試行",
+        "opt_ignore": "無視",
+        "opt_reject": "拒否",
+        "opt_trust_temp": "一時的に信頼",
+        "opt_trust_always": "常に信頼",
+        "opt_all": "すべてのオプション",
+        "opt_solution": "解決策 {n}",
+        "btn_confirm": "確定 (Enter)",
+        "btn_cancel": "取り消す (Backspace)",
     },
 }
 
@@ -239,6 +335,14 @@ class PtySession(QObject):
         except OSError:
             pass
 
+    def is_canonical(self) -> bool:
+        if self._master_fd < 0:
+            return True
+        try:
+            return bool(termios.tcgetattr(self._master_fd)[3] & termios.ICANON)
+        except OSError:
+            return True
+
     def write(self, data: bytes) -> None:
         if self._master_fd < 0 or not data:
             return
@@ -301,14 +405,21 @@ class PtySession(QObject):
 
 class ConsoleView(QPlainTextEdit):
     input_bytes = pyqtSignal(bytes)
+    prompt_option_clicked = pyqtSignal(str)
+    prompt_option_submitted = pyqtSignal(str)
+    prompt_confirm_clicked = pyqtSignal()
+    prompt_clear_clicked = pyqtSignal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self.setReadOnly(True)
+        # Keep editable=True so Qt natively draws and blinks the text cursor;
+        # keyPressEvent and insertFromMimeData route all input to the PTY.
+        self.setReadOnly(False)
         self.setUndoRedoEnabled(False)
         self.setMaximumBlockCount(20000)
-        self.setCursorWidth(2)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.setMouseTracking(True)
+        self.viewport().setMouseTracking(True)
         self._ansi = AnsiState()
         self._csi_buf = ""
         self._in_esc = False
@@ -317,6 +428,95 @@ class ConsoleView(QPlainTextEdit):
         self._osc_buf = ""
         self._utf8_pending = b""
         self._line_col = 0
+        self._active_prompt_block: int | None = None
+        self._active_options: list[str] = []
+        self._active_default_opt: str | None = None
+        self._selected_opt_idx: int | None = None
+        self._prompt_buttons: list[QPushButton] = []
+        self._help_buttons: list[tuple[int, int, str, QPushButton]] = []
+        self._highlighted_help_span: tuple[int, int, int] | None = None
+        self._is_canonical = lambda: True
+
+        self._button_qss = """
+            QPushButton {
+                background-color: #24292f;
+                color: #79c0ff;
+                border: 1px solid #444c56;
+                border-radius: 6px;
+                padding: 2px 10px;
+                font-size: 12pt;
+            }
+            QPushButton:hover {
+                background-color: #323942;
+                color: #a5d6ff;
+                border-color: #58a6ff;
+            }
+            QPushButton[defaultOption='true'] {
+                background-color: #1b4d3e;
+                color: #ffffff;
+                border: 1px solid #2ea043;
+                font-weight: bold;
+            }
+            QPushButton[defaultOption='true']:hover {
+                background-color: #236853;
+                border-color: #3fb950;
+            }
+            QPushButton[selected='true'] {
+                background-color: #3b4b5e;
+                color: #ffffff;
+                border: 2px solid #58a6ff;
+            }
+            QPushButton[defaultOption='true'][selected='true'] {
+                background-color: #2e7d62;
+                border: 2px solid #56d364;
+            }
+        """
+
+        self._help_button_qss = """
+            QPushButton {
+                background-color: #24292f;
+                color: #79c0ff;
+                border: 1px solid #444c56;
+                border-radius: 5px;
+                padding: 0px 2px;
+                margin: 0px;
+                min-height: 0px;
+            }
+            QPushButton:hover {
+                background-color: #323942;
+                color: #a5d6ff;
+                border-color: #58a6ff;
+            }
+            QPushButton[defaultOption='true'] {
+                background-color: #1b4d3e;
+                color: #ffffff;
+                border: 1px solid #2ea043;
+                font-weight: bold;
+            }
+            QPushButton[defaultOption='true']:hover {
+                background-color: #236853;
+                border-color: #3fb950;
+            }
+            QPushButton[selected='true'] {
+                background-color: #3b4b5e;
+                color: #ffffff;
+                border: 2px solid #58a6ff;
+                font-weight: bold;
+            }
+            QPushButton[defaultOption='true'][selected='true'] {
+                background-color: #2e7d62;
+                border: 2px solid #56d364;
+            }
+        """
+
+        self._btn_container = QWidget(self.viewport())
+        self._btn_container.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self._btn_container.setVisible(False)
+        self._btn_layout = QHBoxLayout(self._btn_container)
+        self._btn_layout.setContentsMargins(0, 0, 0, 0)
+        self._btn_layout.setSpacing(6)
+        self._btn_container.setStyleSheet(self._button_qss)
+        self.verticalScrollBar().valueChanged.connect(self._reposition_prompt_buttons)
 
         self.setStyleSheet(
             f"""
@@ -329,25 +529,353 @@ class ConsoleView(QPlainTextEdit):
             """
         )
         self.setFont(pick_mono_font())
+        self.setCursorWidth(max(self.fontMetrics().horizontalAdvance("M"), 8))
+
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        self._reposition_prompt_buttons()
+
+    def _restyle_prompt_chips(self) -> None:
+        selected_opt = (
+            self._active_options[self._selected_opt_idx]
+            if self._selected_opt_idx is not None and 0 <= self._selected_opt_idx < len(self._active_options)
+            else None
+        )
+        for idx, btn in enumerate(self._prompt_buttons):
+            is_sel = self._selected_opt_idx == idx
+            btn.setProperty("selected", "true" if is_sel else "false")
+            btn.style().unpolish(btn)
+            btn.style().polish(btn)
+        for _bn, _sc, _ol, hbtn in self._help_buttons:
+            is_sel = selected_opt is not None and hbtn.property("optKey") == selected_opt
+            hbtn.setProperty("selected", "true" if is_sel else "false")
+            hbtn.style().unpolish(hbtn)
+            hbtn.style().polish(hbtn)
+
+    def _reposition_prompt_buttons(self) -> None:
+        if self._active_prompt_block is None or not self._prompt_buttons:
+            return
+        block = self.document().findBlockByNumber(self._active_prompt_block)
+        if not block.isValid():
+            self._btn_container.setVisible(False)
+            return
+        cur = QTextCursor(block)
+        cur.setPosition(block.position() + len(block.text()))
+        rect = self.cursorRect(cur)
+        vw = self.viewport().width()
+        vh = self.viewport().height()
+        if rect.bottom() < 0 or rect.top() > vh:
+            self._btn_container.setVisible(False)
+            return
+
+        self._btn_layout.activate()
+        self._btn_container.adjustSize()
+        bw = self._btn_container.width()
+        bh = self._btn_container.height()
+
+        x = rect.right() + 10
+        y = rect.top() + (rect.height() - bh) // 2
+        if x + bw > vw - 8:
+            x = max(8, vw - bw - 10)
+            if rect.bottom() + 4 + bh <= vh - 4:
+                x = 8
+                y = rect.bottom() + 4
+
+        y = max(4, min(y, max(vh - bh - 4, 4)))
+        self._btn_container.move(max(x, 8), y)
+        self._btn_container.setVisible(True)
+        self._btn_container.raise_()
+
+        for block_num, key_col, _orig_label, btn in self._help_buttons:
+            hblock = self.document().findBlockByNumber(block_num)
+            if not hblock.isValid():
+                btn.setVisible(False)
+                continue
+            hcur = QTextCursor(hblock)
+            hcur.setPosition(hblock.position() + min(key_col, len(hblock.text())))
+            hrect = self.cursorRect(hcur)
+            if hrect.bottom() < 0 or hrect.top() > vh:
+                btn.setVisible(False)
+                continue
+            btn.adjustSize()
+            btn.setFixedHeight(max(hrect.height() - 1, 20))
+            hx = max(0, hrect.left() - 3)
+            hy = max(0, hrect.top())
+            btn.move(hx, hy)
+            btn.setVisible(True)
+            btn.raise_()
+
+    def set_inline_prompt_links(self, options: list[str], default_opt: str | None) -> None:
+        """Render real clickable QPushButton widgets inline next to the active prompt."""
+        doc = self.document()
+        block = doc.lastBlock()
+        if not _PROMPT_RE.match(block.text().rstrip()):
+            return
+
+        self.clear_inline_prompt_links()
+        self._active_prompt_block = block.blockNumber()
+        self._active_options = list(options)
+        self._active_default_opt = default_opt
+        self._selected_opt_idx = None
+
+        for opt in options:
+            label = option_button_label(opt, options)
+            if opt == default_opt:
+                label = f"{label} (Enter)"
+            btn = QPushButton(label, self._btn_container)
+            btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+            btn.setCursor(Qt.CursorShape.PointingHandCursor)
+            if opt == default_opt:
+                btn.setProperty("defaultOption", "true")
+            btn.clicked.connect(lambda _checked=False, o=opt: self.prompt_option_clicked.emit(o))
+            self._btn_layout.addWidget(btn)
+            self._prompt_buttons.append(btn)
+
+        # Also add per-line buttons for expanded '?' option descriptions (#1 : key - desc).
+        prev = block.previous()
+        steps = 0
+        help_entries: list[tuple[int, int, str, str]] = []
+        while prev.isValid() and steps < 25:
+            m = _HELP_OPT_RE.match(prev.text())
+            if m:
+                help_entries.append((prev.blockNumber(), m.start(1), m.group(1), m.group(2)))
+            elif help_entries and not prev.text().strip():
+                break
+            elif help_entries:
+                break
+            prev = prev.previous()
+            steps += 1
+
+        for block_num, start_col, btn_label, opt_key in reversed(help_entries):
+            hblock = doc.findBlockByNumber(block_num)
+            if hblock.isValid():
+                saved_pos = self.textCursor().position()
+                rcur = QTextCursor(hblock)
+                rcur.setPosition(hblock.position() + start_col)
+                rcur.setPosition(hblock.position() + start_col + len(btn_label), QTextCursor.MoveMode.KeepAnchor)
+                rcur.insertText(" " * len(btn_label))
+                restore = QTextCursor(doc)
+                restore.setPosition(min(saved_pos, len(doc.toPlainText())))
+                self.setTextCursor(restore)
+
+            hbtn = QPushButton(btn_label, self.viewport())
+            hbtn.setFont(pick_mono_font())
+            hbtn.setStyleSheet(self._help_button_qss)
+            hbtn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+            hbtn.setCursor(Qt.CursorShape.PointingHandCursor)
+            hbtn.setProperty("optKey", opt_key)
+            if opt_key == default_opt:
+                hbtn.setProperty("defaultOption", "true")
+            hbtn.clicked.connect(lambda _checked=False, o=opt_key: self.prompt_option_clicked.emit(o))
+            self._help_buttons.append((block_num, start_col, btn_label, hbtn))
+
+        self._btn_container.setVisible(True)
+        self._reposition_prompt_buttons()
+        self.ensureCursorVisible()
+
+    def _clear_help_highlight(self) -> None:
+        if self._highlighted_help_span is None:
+            return
+        block_num, start_col, length = self._highlighted_help_span
+        self._highlighted_help_span = None
+        block = self.document().findBlockByNumber(block_num)
+        if block.isValid() and start_col + length <= len(block.text()):
+            fmt = QTextCharFormat()
+            fmt.setFont(pick_mono_font())
+            fmt.setForeground(QColor(DEFAULT_FG))
+            fmt.setBackground(QColor(DEFAULT_BG))
+            cur = QTextCursor(block)
+            cur.setPosition(block.position() + start_col)
+            cur.setPosition(block.position() + start_col + length, QTextCursor.MoveMode.KeepAnchor)
+            cur.setCharFormat(fmt)
+
+    def _restore_help_buttons(self, chosen_opt: str | None = None) -> None:
+        doc = self.document()
+        saved_pos = self.textCursor().position()
+        for block_num, start_col, orig_label, hbtn in self._help_buttons:
+            opt_key = hbtn.property("optKey")
+            hbtn.setVisible(False)
+            hbtn.deleteLater()
+            hblock = doc.findBlockByNumber(block_num)
+            if hblock.isValid() and start_col + len(orig_label) <= len(hblock.text()):
+                rcur = QTextCursor(hblock)
+                rcur.setPosition(hblock.position() + start_col)
+                rcur.setPosition(hblock.position() + start_col + len(orig_label), QTextCursor.MoveMode.KeepAnchor)
+                rcur.insertText(orig_label)
+                if chosen_opt is not None and opt_key == chosen_opt:
+                    hl_fmt = QTextCharFormat()
+                    hl_font = pick_mono_font()
+                    hl_font.setBold(True)
+                    hl_fmt.setFont(hl_font)
+                    hl_fmt.setForeground(QColor("#ffffff"))
+                    hl_fmt.setBackground(QColor("#1b4d3e" if opt_key == self._active_default_opt else "#3b4b5e"))
+                    rcur.setPosition(hblock.position() + start_col)
+                    rcur.setPosition(hblock.position() + start_col + len(orig_label), QTextCursor.MoveMode.KeepAnchor)
+                    rcur.setCharFormat(hl_fmt)
+                    self._highlighted_help_span = (block_num, start_col, len(orig_label))
+        self._help_buttons.clear()
+        restore = QTextCursor(doc)
+        restore.setPosition(min(saved_pos, len(doc.toPlainText())))
+        self.setTextCursor(restore)
+
+    def _clear_prompt_buttons(self) -> None:
+        self._btn_container.setVisible(False)
+        for btn in self._prompt_buttons:
+            self._btn_layout.removeWidget(btn)
+            btn.deleteLater()
+        self._prompt_buttons.clear()
+
+    def show_confirm_cancel_buttons(self, chosen_opt: str | None = None) -> None:
+        """Replace option buttons with Confirm / Clear and highlight chosen option in text."""
+        doc = self.document()
+        block = doc.lastBlock()
+        self._clear_prompt_buttons()
+        self._clear_help_highlight()
+        self._restore_help_buttons(chosen_opt=chosen_opt)
+
+        self._active_prompt_block = block.blockNumber()
+        self._active_options = ["__confirm__", "__cancel__"]
+        self._active_default_opt = "__confirm__"
+        self._selected_opt_idx = None
+
+        confirm_btn = QPushButton(tr("btn_confirm"), self._btn_container)
+        confirm_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        confirm_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        confirm_btn.setProperty("defaultOption", "true")
+        confirm_btn.clicked.connect(self.prompt_confirm_clicked.emit)
+        self._btn_layout.addWidget(confirm_btn)
+        self._prompt_buttons.append(confirm_btn)
+
+        cancel_btn = QPushButton(tr("btn_cancel"), self._btn_container)
+        cancel_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        cancel_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        cancel_btn.clicked.connect(self.prompt_clear_clicked.emit)
+        self._btn_layout.addWidget(cancel_btn)
+        self._prompt_buttons.append(cancel_btn)
+
+        self._btn_container.setVisible(True)
+        self._reposition_prompt_buttons()
+        self.ensureCursorVisible()
+
+    def clear_inline_prompt_links(self) -> None:
+        """Hide and remove inline prompt buttons and restore masked help-line labels."""
+        self._active_prompt_block = None
+        self._active_options = []
+        self._active_default_opt = None
+        self._selected_opt_idx = None
+        self._clear_prompt_buttons()
+        self._clear_help_highlight()
+        self._restore_help_buttons(chosen_opt=None)
+
+    def _snap_cursor_to_input(self) -> None:
+        cur = self._last_block_cursor()
+        block = cur.block()
+        col = min(max(getattr(self, "_line_col", len(block.text())), 0), len(block.text()))
+        cur.setPosition(block.position() + col)
+        self.setTextCursor(cur)
+
+    def mouseReleaseEvent(self, event) -> None:  # noqa: N802
+        super().mouseReleaseEvent(event)
+        if not self.textCursor().hasSelection():
+            self._snap_cursor_to_input()
+
+    def insertFromMimeData(self, source) -> None:  # noqa: N802
+        if source is not None and source.hasText():
+            self.input_bytes.emit(source.text().encode("utf-8", errors="replace"))
+
+    def inputMethodEvent(self, event) -> None:  # noqa: N802
+        text = event.commitString()
+        if text:
+            self.input_bytes.emit(text.encode("utf-8", errors="replace"))
+        event.accept()
 
     def keyPressEvent(self, event: QKeyEvent) -> None:  # noqa: N802
+        if self._active_prompt_block is not None and self._active_options:
+            count = len(self._active_options)
+            if event.key() == Qt.Key.Key_Right:
+                if self._selected_opt_idx is None:
+                    if self._active_default_opt in self._active_options:
+                        self._selected_opt_idx = self._active_options.index(self._active_default_opt)
+                    else:
+                        self._selected_opt_idx = 0
+                else:
+                    self._selected_opt_idx = (self._selected_opt_idx + 1) % count
+                self._restyle_prompt_chips()
+                return
+            if event.key() == Qt.Key.Key_Left:
+                if self._selected_opt_idx is None:
+                    if self._active_default_opt in self._active_options:
+                        self._selected_opt_idx = self._active_options.index(self._active_default_opt)
+                    else:
+                        self._selected_opt_idx = count - 1
+                else:
+                    self._selected_opt_idx = (self._selected_opt_idx - 1) % count
+                self._restyle_prompt_chips()
+                return
+            if event.key() == Qt.Key.Key_Escape and self._selected_opt_idx is not None:
+                self._selected_opt_idx = None
+                self._restyle_prompt_chips()
+                return
+            if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter) and self._selected_opt_idx is not None:
+                opt = self._active_options[self._selected_opt_idx]
+                if opt == "__confirm__":
+                    self.prompt_confirm_clicked.emit()
+                elif opt == "__cancel__":
+                    self.prompt_clear_clicked.emit()
+                else:
+                    self.prompt_option_submitted.emit(opt)
+                return
+        if event.key() in (
+            Qt.Key.Key_Up,
+            Qt.Key.Key_Down,
+            Qt.Key.Key_Left,
+            Qt.Key.Key_Right,
+            Qt.Key.Key_Home,
+            Qt.Key.Key_End,
+            Qt.Key.Key_PageUp,
+            Qt.Key.Key_PageDown,
+        ):
+            self._snap_cursor_to_input()
+            if self._is_canonical():
+                return
+            seq_map = {
+                Qt.Key.Key_Up: b"\x1b[A",
+                Qt.Key.Key_Down: b"\x1b[B",
+                Qt.Key.Key_Right: b"\x1b[C",
+                Qt.Key.Key_Left: b"\x1b[D",
+                Qt.Key.Key_Home: b"\x1b[H",
+                Qt.Key.Key_End: b"\x1b[F",
+                Qt.Key.Key_PageUp: b"\x1b[5~",
+                Qt.Key.Key_PageDown: b"\x1b[6~",
+            }
+            self.input_bytes.emit(seq_map[event.key()])
+            return
         if event.key() in (Qt.Key.Key_C,) and event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+            self._snap_cursor_to_input()
             self.input_bytes.emit(b"\x03")
             return
         if event.key() == Qt.Key.Key_Backspace:
+            self._snap_cursor_to_input()
             self.input_bytes.emit(b"\x7f")
             return
         if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            self._snap_cursor_to_input()
             self.input_bytes.emit(b"\r")
             return
         if event.key() == Qt.Key.Key_Tab:
+            self._snap_cursor_to_input()
             self.input_bytes.emit(b"\t")
             return
-        text = event.text()
+        if event.key() in (Qt.Key.Key_Escape, Qt.Key.Key_Delete, Qt.Key.Key_Insert) or (
+            Qt.Key.Key_F1 <= event.key() <= Qt.Key.Key_F35
+        ):
+            return
+        text = "".join(ch for ch in event.text() if ch >= " " and ord(ch) != 0x7F)
         if text:
+            self._snap_cursor_to_input()
             self.input_bytes.emit(text.encode("utf-8", errors="replace"))
             return
-        super().keyPressEvent(event)
+        return
 
     def feed(self, data: bytes) -> None:
         if self._utf8_pending:
@@ -541,22 +1069,175 @@ class ConsoleView(QPlainTextEdit):
         self.setTextCursor(cursor)
 
 
+_PROMPT_RE = re.compile(r"^(.*?)\[([^\[\]\n]+)\](?:\s*\(([^()\n]+)\))?\s*[:?]\s*$")
+_HELP_OPT_RE = re.compile(r"^\s*(#\d+\s*:\s*([^\s]+))\s+-\s+.+$")
+
+
+def resolve_app_icon(widget: QWidget | None = None) -> QIcon:
+    """Return the updater theme icon, falling back to a standard Qt icon."""
+    icon = QIcon.fromTheme("system-software-update")
+    if not icon.isNull():
+        return icon
+    icon = QIcon.fromTheme("software-update-available")
+    if not icon.isNull():
+        return icon
+    style = widget.style() if widget is not None else QApplication.style()
+    if style is not None:
+        return style.standardIcon(QStyle.StandardPixmap.SP_ComputerIcon)
+    return QIcon()
+
+
+def option_button_label(opt: str, options: list[str]) -> str:
+    """Map a Zypper prompt option token to a human-readable localized button label."""
+    low = opt.lower()
+    if low.isdigit():
+        return tr("opt_solution", n=opt)
+    if low == "?":
+        return tr("opt_all")
+    if low in ("y", "yes", "j", "ja", "sim", "sí"):
+        return tr("opt_yes")
+    if low in ("n", "no", "não", "nein"):
+        return tr("opt_no")
+    if low == "s":
+        if "n" in options or "no" in options or "não" in options:
+            return tr("opt_yes")
+        if any(o.isdigit() for o in options):
+            return tr("opt_skip")
+    if low == "r" and any(o.isdigit() for o in options):
+        return tr("opt_retry")
+    if low == "v":
+        return tr("opt_view")
+    if low == "d":
+        return tr("opt_details")
+    if low == "c":
+        return tr("opt_cancel")
+    if "i" in options and low in ("a", "r", "i"):
+        return {"a": tr("opt_abort"), "r": tr("opt_retry"), "i": tr("opt_ignore")}[low]
+    if "t" in options and low in ("r", "t", "a"):
+        return {"r": tr("opt_reject"), "t": tr("opt_trust_temp"), "a": tr("opt_trust_always")}[low]
+    return opt
+
+
+def parse_zypper_prompt(line: str) -> tuple[str, list[str], str | None] | None:
+    """Extract (question, options, default) from an interactive Zypper prompt line."""
+    stripped = line.rstrip()
+    if not stripped:
+        return None
+    match = _PROMPT_RE.match(stripped)
+    if not match:
+        return None
+    question_part, bracket_part, default_part = match.groups()
+    if "/" not in bracket_part:
+        return None
+
+    options: list[str] = []
+    seen: set[str] = set()
+    for raw in bracket_part.split("/"):
+        tok = raw.strip()
+        if not tok:
+            continue
+        if tok.startswith("..."):
+            # Zypper uses "...? shows all options" (or localized equivalent) as a tail hint.
+            if "?" in tok and "?" not in seen:
+                options.append("?")
+                seen.add("?")
+            continue
+        if len(tok) > 16 or any(ch.isspace() for ch in tok):
+            return None
+        if tok not in seen:
+            options.append(tok)
+            seen.add(tok)
+
+    if len(options) < 2:
+        return None
+
+    default_opt = default_part.strip() if default_part else None
+    if default_opt and default_opt not in seen:
+        default_opt = None
+    question = question_part.strip() or stripped
+    return question, options, default_opt
+
+
+def send_desktop_notification(summary: str, body: str) -> None:
+    """Send a desktop notification without creating a duplicate tray icon."""
+    if shutil.which("notify-send"):
+        try:
+            subprocess.Popen(
+                [
+                    "notify-send",
+                    "-i",
+                    "system-software-update",
+                    "-a",
+                    "update-console",
+                    summary,
+                    body,
+                ],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            return
+        except OSError:
+            pass
+
+    if shutil.which("dbus-send"):
+        try:
+            subprocess.Popen(
+                [
+                    "dbus-send",
+                    "--session",
+                    "--type=method_call",
+                    "--dest=org.freedesktop.Notifications",
+                    "/org/freedesktop/Notifications",
+                    "org.freedesktop.Notifications.Notify",
+                    "string:update-console",
+                    "uint32:0",
+                    "string:system-software-update",
+                    f"string:{summary}",
+                    f"string:{body}",
+                    "array:string:",
+                    "dict:string:string:",
+                    "int32:8000",
+                ],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        except OSError:
+            pass
+
+
 class UpdateConsoleWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle(window_title())
+        self.setWindowIcon(resolve_app_icon(self))
         self._session: PtySession | None = None
         self._awaiting_exit = False
+        self._active_prompt_sig: tuple[int, tuple[str, ...]] | None = None
+        self._notified_prompt_sig: tuple[int, tuple[str, ...]] | None = None
+        self._typed_shortcut = ""
+        self._prompt_block_num: int | None = None
+        self._prompt_base_text: str | None = None
+        self._confirm_mode = False
+
+        self._prompt_timer = QTimer(self)
+        self._prompt_timer.setSingleShot(True)
+        self._prompt_timer.setInterval(80)
+        self._prompt_timer.timeout.connect(self._check_for_prompt)
 
         central = QWidget(self)
         layout = QVBoxLayout(central)
         layout.setContentsMargins(0, 0, 0, 0)
         self.view = ConsoleView(central)
         layout.addWidget(self.view)
+
         self.setCentralWidget(central)
         self.setStyleSheet(f"QMainWindow {{ background-color: {DEFAULT_BG}; }}")
 
         self.view.input_bytes.connect(self._on_input)
+        self.view.prompt_option_clicked.connect(self._type_prompt_shortcut)
+        self.view.prompt_option_submitted.connect(self._submit_prompt_option)
+        self.view.prompt_confirm_clicked.connect(self._confirm_prompt)
+        self.view.prompt_clear_clicked.connect(self._clear_prompt_input)
         QTimer.singleShot(0, self._start_session)
 
     def showEvent(self, event) -> None:  # noqa: N802
@@ -565,6 +1246,7 @@ class UpdateConsoleWindow(QMainWindow):
         self.view.setFocus(Qt.FocusReason.ActiveWindowFocusReason)
 
     def closeEvent(self, event) -> None:  # noqa: N802
+        self._prompt_timer.stop()
         if self._session is not None:
             self._session.terminate()
         super().closeEvent(event)
@@ -581,9 +1263,99 @@ class UpdateConsoleWindow(QMainWindow):
             if os.path.isfile(here):
                 argv = ["/usr/bin/pkexec", here, "--root"]
         self._session = PtySession(argv, self)
-        self._session.output.connect(self.view.feed)
+        self.view._is_canonical = self._session.is_canonical
+        self._session.output.connect(self._on_pty_output)
         self._session.exited.connect(self._on_exited)
         self._sync_winsize()
+
+    def _on_pty_output(self, data: bytes) -> None:
+        self.view.feed(data)
+        if b"\n" in data:
+            self._clear_active_prompt()
+        else:
+            self.view._reposition_prompt_buttons()
+        self._prompt_timer.start()
+
+    def _clear_active_prompt(self) -> None:
+        self._active_prompt_sig = None
+        self._typed_shortcut = ""
+        self._prompt_block_num = None
+        self._prompt_base_text = None
+        self._confirm_mode = False
+        self.view.clear_inline_prompt_links()
+
+    def _type_prompt_shortcut(self, option: str) -> None:
+        if self._session is None or self._awaiting_exit:
+            return
+        erase = b"\x7f" * len(self._typed_shortcut)
+        self._typed_shortcut = option
+        self._confirm_mode = True
+        self.view.show_confirm_cancel_buttons(option)
+        self._session.write(erase + option.encode("utf-8"))
+        self.view.setFocus(Qt.FocusReason.OtherFocusReason)
+
+    def _confirm_prompt(self) -> None:
+        if self._session is None or self._awaiting_exit:
+            return
+        self._clear_active_prompt()
+        self._session.write(b"\r")
+        self.view.setFocus(Qt.FocusReason.OtherFocusReason)
+
+    def _clear_prompt_input(self) -> None:
+        if self._session is None or self._awaiting_exit:
+            return
+        last_text = self.view.document().lastBlock().text().rstrip()
+        typed_len = 0
+        if self._prompt_base_text and last_text.startswith(self._prompt_base_text):
+            typed_len = len(last_text[len(self._prompt_base_text) :].strip())
+        typed_len = max(typed_len, len(self._typed_shortcut), 1)
+        self._typed_shortcut = ""
+        self._active_prompt_sig = None
+        self._session.write(b"\x7f" * typed_len)
+        self.view.setFocus(Qt.FocusReason.OtherFocusReason)
+
+    def _submit_prompt_option(self, option: str) -> None:
+        if self._session is None or self._awaiting_exit:
+            return
+        erase = b"\x7f" * len(self._typed_shortcut)
+        self._clear_active_prompt()
+        self._session.write(erase + f"{option}\n".encode("utf-8"))
+        self.view.setFocus(Qt.FocusReason.OtherFocusReason)
+
+    def _check_for_prompt(self) -> None:
+        if self._awaiting_exit:
+            return
+        doc = self.view.document()
+        last_block = doc.lastBlock()
+        parsed = parse_zypper_prompt(last_block.text())
+        if parsed is not None:
+            _question, options, default_opt = parsed
+            sig = (doc.blockCount(), tuple(options))
+            if sig != self._active_prompt_sig or self._confirm_mode:
+                self._active_prompt_sig = sig
+                self._prompt_block_num = last_block.blockNumber()
+                self._prompt_base_text = last_block.text().rstrip()
+                self._confirm_mode = False
+                self.view.set_inline_prompt_links(options, default_opt)
+
+            if sig != self._notified_prompt_sig and not self.isActiveWindow():
+                self._notified_prompt_sig = sig
+                send_desktop_notification(
+                    tr("window_title"),
+                    tr("prompt_notify", question=last_block.text().strip()),
+                )
+            return
+
+        if (
+            self._prompt_block_num == last_block.blockNumber()
+            and self._prompt_base_text is not None
+        ):
+            tail = last_block.text().rstrip()
+            if tail.startswith(self._prompt_base_text) and len(tail) > len(self._prompt_base_text):
+                typed = tail[len(self._prompt_base_text) :].strip()
+                if not self._confirm_mode:
+                    self._confirm_mode = True
+                    self.view.show_confirm_cancel_buttons(typed or None)
 
     def _sync_winsize(self) -> None:
         if self._session is None:
@@ -600,13 +1372,17 @@ class UpdateConsoleWindow(QMainWindow):
             if b"\r" in data or b"\n" in data:
                 self.close()
             return
+        if b"\r" in data or b"\n" in data or b"\x03" in data:
+            self._clear_active_prompt()
+        elif data in (b"\x7f", b"\x08"):
+            self._typed_shortcut = self._typed_shortcut[:-1]
+        else:
+            self._typed_shortcut = ""
         if self._session is not None:
             self._session.write(data)
 
     def _poll_update_viewer(self) -> None:
         try:
-            import subprocess
-
             subprocess.run(
                 [
                     "timeout",
@@ -627,6 +1403,8 @@ class UpdateConsoleWindow(QMainWindow):
 
     def _on_exited(self, code: int) -> None:
         # --root ends after the upgrade; prompt locally (like wait_for_enter).
+        self._prompt_timer.stop()
+        self._clear_active_prompt()
         self._poll_update_viewer()
         if code != 0:
             self.view.feed(tr("process_exited", code=code).encode("utf-8"))
@@ -642,6 +1420,7 @@ def main() -> int:
 
     app = QApplication(sys.argv)
     app.setApplicationName("update-console")
+    app.setWindowIcon(resolve_app_icon())
     window = UpdateConsoleWindow()
     window.show()
     return app.exec()

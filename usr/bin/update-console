@@ -23,6 +23,7 @@ from PyQt6.QtWidgets import (
     QApplication,
     QHBoxLayout,
     QMainWindow,
+    QMenu,
     QPlainTextEdit,
     QPushButton,
     QStyle,
@@ -55,6 +56,8 @@ MESSAGES = {
         "opt_solution": "Solution {n}",
         "btn_confirm": "Confirm (Enter)",
         "btn_cancel": "Clear (Backspace)",
+        "ctx_copy": "Copy",
+        "ctx_paste": "Paste",
     },
     "pt": {
         "window_title": "Instalar atualizações",
@@ -77,6 +80,8 @@ MESSAGES = {
         "opt_solution": "Solução {n}",
         "btn_confirm": "Confirmar (Enter)",
         "btn_cancel": "Anular (Backspace)",
+        "ctx_copy": "Copiar",
+        "ctx_paste": "Colar",
     },
     "es": {
         "window_title": "Instalar actualizaciones",
@@ -99,6 +104,8 @@ MESSAGES = {
         "opt_solution": "Solución {n}",
         "btn_confirm": "Confirmar (Enter)",
         "btn_cancel": "Anular (Backspace)",
+        "ctx_copy": "Copiar",
+        "ctx_paste": "Pegar",
     },
     "de": {
         "window_title": "Aktualisierungen installieren",
@@ -121,6 +128,8 @@ MESSAGES = {
         "opt_solution": "Lösung {n}",
         "btn_confirm": "Bestätigen (Enter)",
         "btn_cancel": "Verwerfen (Backspace)",
+        "ctx_copy": "Kopieren",
+        "ctx_paste": "Einfügen",
     },
     "ja": {
         "window_title": "更新をインストール",
@@ -143,6 +152,8 @@ MESSAGES = {
         "opt_solution": "解決策 {n}",
         "btn_confirm": "確定 (Enter)",
         "btn_cancel": "取り消す (Backspace)",
+        "ctx_copy": "コピー",
+        "ctx_paste": "貼り付け",
     },
 }
 
@@ -216,19 +227,25 @@ def window_title() -> str:
     return tr("window_title")
 
 
-def pick_mono_font() -> QFont:
-    preferred = ["Hack", "Source Code Pro", "DejaVu Sans Mono", "Liberation Mono", "Monospace"]
-    available = set(QFontDatabase.families())
-    family = next((name for name in preferred if name in available), "Monospace")
-    font = QFont(family)
+_MONO_FAMILY: str | None = None
+
+
+def pick_mono_font(point_size: int = FONT_POINT_SIZE) -> QFont:
+    global _MONO_FAMILY
+    if _MONO_FAMILY is None:
+        preferred = ["Hack", "Source Code Pro", "DejaVu Sans Mono", "Liberation Mono", "Monospace"]
+        available = set(QFontDatabase.families())
+        _MONO_FAMILY = next((name for name in preferred if name in available), "Monospace")
+    font = QFont(_MONO_FAMILY)
     font.setStyleHint(QFont.StyleHint.Monospace)
     font.setFixedPitch(True)
-    font.setPointSize(FONT_POINT_SIZE)
+    font.setPointSize(point_size)
     return font
 
 
 class AnsiState:
     def __init__(self) -> None:
+        self.font_size = FONT_POINT_SIZE
         self.reset()
 
     def reset(self) -> None:
@@ -278,7 +295,7 @@ class AnsiState:
         if self.dim and not self.bold:
             color = color.darker(150)
         fmt.setForeground(color)
-        font = pick_mono_font()
+        font = pick_mono_font(self.font_size)
         font.setBold(self.bold)
         fmt.setFont(font)
         return fmt
@@ -355,7 +372,7 @@ class PtySession(QObject):
         if self._master_fd < 0:
             return
         try:
-            while True:
+            for _ in range(8):
                 chunk = os.read(self._master_fd, 8192)
                 if not chunk:
                     self._cleanup_fd()
@@ -409,6 +426,7 @@ class ConsoleView(QPlainTextEdit):
     prompt_option_submitted = pyqtSignal(str)
     prompt_confirm_clicked = pyqtSignal()
     prompt_clear_clicked = pyqtSignal()
+    font_size_changed = pyqtSignal(int)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -436,6 +454,11 @@ class ConsoleView(QPlainTextEdit):
         self._help_buttons: list[tuple[int, int, str, QPushButton]] = []
         self._highlighted_help_span: tuple[int, int, int] | None = None
         self._is_canonical = lambda: True
+        self._font_size = FONT_POINT_SIZE
+        self._follow_tail = True
+        self._updating_scroll = False
+        self.verticalScrollBar().valueChanged.connect(self._on_scroll_changed)
+        self.verticalScrollBar().rangeChanged.connect(self._on_range_changed)
 
         self._button_qss = """
             QPushButton {
@@ -659,7 +682,7 @@ class ConsoleView(QPlainTextEdit):
                 self.setTextCursor(restore)
 
             hbtn = QPushButton(btn_label, self.viewport())
-            hbtn.setFont(pick_mono_font())
+            hbtn.setFont(pick_mono_font(self._font_size))
             hbtn.setStyleSheet(self._help_button_qss)
             hbtn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
             hbtn.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -772,12 +795,69 @@ class ConsoleView(QPlainTextEdit):
         block = cur.block()
         col = min(max(getattr(self, "_line_col", len(block.text())), 0), len(block.text()))
         cur.setPosition(block.position() + col)
-        self.setTextCursor(cur)
+        was_updating = self._updating_scroll
+        self._updating_scroll = True
+        try:
+            self.setTextCursor(cur)
+        finally:
+            self._updating_scroll = was_updating
 
     def mouseReleaseEvent(self, event) -> None:  # noqa: N802
         super().mouseReleaseEvent(event)
         if not self.textCursor().hasSelection():
             self._snap_cursor_to_input()
+
+    def _paste_from_clipboard(self) -> None:
+        clip = QApplication.clipboard()
+        if clip is not None and clip.text():
+            self._snap_cursor_to_input()
+            self.input_bytes.emit(clip.text().encode("utf-8", errors="replace"))
+
+    def contextMenuEvent(self, event) -> None:  # noqa: N802
+        menu = QMenu(self)
+        copy_act = menu.addAction(tr("ctx_copy"))
+        copy_act.setEnabled(self.textCursor().hasSelection())
+        copy_act.triggered.connect(self.copy)
+
+        paste_act = menu.addAction(tr("ctx_paste"))
+        clip = QApplication.clipboard()
+        paste_act.setEnabled(bool(clip and clip.text()))
+        paste_act.triggered.connect(self._paste_from_clipboard)
+
+        menu.exec(event.globalPos())
+
+    def set_font_size(self, point_size: int) -> None:
+        clamped = max(8, min(32, point_size))
+        if clamped == self._font_size:
+            return
+        self._font_size = clamped
+        self._ansi.font_size = clamped
+        mono = pick_mono_font(clamped)
+        self.setFont(mono)
+        self.setCursorWidth(max(self.fontMetrics().horizontalAdvance("M"), 8))
+
+        cur = QTextCursor(self.document())
+        cur.select(QTextCursor.SelectionType.Document)
+        fmt = QTextCharFormat()
+        fmt.setFontPointSize(clamped)
+        cur.mergeCharFormat(fmt)
+
+        for _bn, _sc, _ol, hbtn in self._help_buttons:
+            hbtn.setFont(mono)
+            hbtn.adjustSize()
+        self._reposition_prompt_buttons()
+        self.font_size_changed.emit(clamped)
+
+    def wheelEvent(self, event) -> None:  # noqa: N802
+        if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+            delta = event.angleDelta().y()
+            if delta > 0:
+                self.set_font_size(self._font_size + 1)
+            elif delta < 0:
+                self.set_font_size(self._font_size - 1)
+            event.accept()
+            return
+        super().wheelEvent(event)
 
     def insertFromMimeData(self, source) -> None:  # noqa: N802
         if source is not None and source.hasText():
@@ -790,6 +870,16 @@ class ConsoleView(QPlainTextEdit):
         event.accept()
 
     def keyPressEvent(self, event: QKeyEvent) -> None:  # noqa: N802
+        if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+            if event.key() in (Qt.Key.Key_Plus, Qt.Key.Key_Equal):
+                self.set_font_size(self._font_size + 1)
+                return
+            if event.key() == Qt.Key.Key_Minus:
+                self.set_font_size(self._font_size - 1)
+                return
+            if event.key() == Qt.Key.Key_0:
+                self.set_font_size(FONT_POINT_SIZE)
+                return
         if self._active_prompt_block is not None and self._active_options:
             count = len(self._active_options)
             if event.key() == Qt.Key.Key_Right:
@@ -877,6 +967,22 @@ class ConsoleView(QPlainTextEdit):
             return
         return
 
+    def _is_at_bottom(self) -> bool:
+        vbar = self.verticalScrollBar()
+        return vbar.value() >= max(0, vbar.maximum() - 2)
+
+    def _on_scroll_changed(self, _value: int) -> None:
+        if not self._updating_scroll:
+            self._follow_tail = self._is_at_bottom()
+
+    def _on_range_changed(self, _min: int, max_val: int) -> None:
+        if self._follow_tail:
+            self._updating_scroll = True
+            try:
+                self.verticalScrollBar().setValue(max_val)
+            finally:
+                self._updating_scroll = False
+
     def feed(self, data: bytes) -> None:
         if self._utf8_pending:
             data = self._utf8_pending + data
@@ -888,7 +994,15 @@ class ConsoleView(QPlainTextEdit):
             valid = data[: exc.start]
             self._utf8_pending = data[exc.start :]
             text = valid.decode("utf-8", errors="replace")
-        self._consume_text(text)
+        self._updating_scroll = True
+        try:
+            self._consume_text(text)
+            if self._follow_tail:
+                self._snap_cursor_to_input()
+                vbar = self.verticalScrollBar()
+                vbar.setValue(vbar.maximum())
+        finally:
+            self._updating_scroll = False
 
     def _consume_text(self, text: str) -> None:
         for ch in text:
@@ -976,7 +1090,7 @@ class ConsoleView(QPlainTextEdit):
         # A/B (cursor up/down), M/L (delete/insert lines), etc.
 
     def _last_block_cursor(self) -> QTextCursor:
-        cursor = self.textCursor()
+        cursor = QTextCursor(self.document())
         cursor.movePosition(QTextCursor.MoveOperation.End)
         return cursor
 
@@ -984,9 +1098,7 @@ class ConsoleView(QPlainTextEdit):
         cursor = self._last_block_cursor()
         cursor.setCharFormat(self._ansi.char_format())
         cursor.insertText("\n")
-        self.setTextCursor(cursor)
         self._line_col = 0
-        self.ensureCursorVisible()
 
     def _write_chars(self, text: str, fmt: QTextCharFormat) -> None:
         """Write into the last line; overwrite after CR instead of inserting."""
@@ -1008,16 +1120,10 @@ class ConsoleView(QPlainTextEdit):
         cursor.setCharFormat(fmt)
         cursor.insertText(text)
         self._line_col = col + len(text)
-        self.setTextCursor(cursor)
-        self.ensureCursorVisible()
 
     def _carriage_return(self) -> None:
         # Only affects the current (last) line — keeps history intact.
         self._line_col = 0
-        cursor = self._last_block_cursor()
-        block = cursor.block()
-        cursor.setPosition(block.position())
-        self.setTextCursor(cursor)
 
     def _backspace(self) -> None:
         col = getattr(self, "_line_col", 0)
@@ -1028,7 +1134,6 @@ class ConsoleView(QPlainTextEdit):
         cursor.setPosition(block.position() + col)
         cursor.deletePreviousChar()
         self._line_col = col - 1
-        self.setTextCursor(cursor)
 
     def _erase_in_last_line(self, mode: int) -> None:
         cursor = self._last_block_cursor()
@@ -1049,15 +1154,12 @@ class ConsoleView(QPlainTextEdit):
             cursor.setPosition(block.position() + col)
             cursor.movePosition(QTextCursor.MoveOperation.EndOfBlock, QTextCursor.MoveMode.KeepAnchor)
             cursor.removeSelectedText()
-        self.setTextCursor(cursor)
 
     def _move_in_last_line(self, col: int) -> None:
         cursor = self._last_block_cursor()
         block = cursor.block()
         target = min(max(col - 1, 0), len(block.text()))
         self._line_col = target
-        cursor.setPosition(block.position() + target)
-        self.setTextCursor(cursor)
 
     def _nudge_in_last_line(self, delta: int) -> None:
         cursor = self._last_block_cursor()
@@ -1065,8 +1167,6 @@ class ConsoleView(QPlainTextEdit):
         col = getattr(self, "_line_col", len(block.text()))
         col = max(0, min(col + delta, len(block.text())))
         self._line_col = col
-        cursor.setPosition(block.position() + col)
-        self.setTextCursor(cursor)
 
 
 _PROMPT_RE = re.compile(r"^(.*?)\[([^\[\]\n]+)\](?:\s*\(([^()\n]+)\))?\s*[:?]\s*$")
@@ -1238,6 +1338,7 @@ class UpdateConsoleWindow(QMainWindow):
         self.view.prompt_option_submitted.connect(self._submit_prompt_option)
         self.view.prompt_confirm_clicked.connect(self._confirm_prompt)
         self.view.prompt_clear_clicked.connect(self._clear_prompt_input)
+        self.view.font_size_changed.connect(self._sync_winsize)
         QTimer.singleShot(0, self._start_session)
 
     def showEvent(self, event) -> None:  # noqa: N802

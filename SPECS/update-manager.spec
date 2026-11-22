@@ -7,8 +7,8 @@ Source0:        %{name}-%{version}.tar.gz
 Requires:       bash
 Requires:       curl
 Requires:       python3
-Requires:       python313-PyQt6
-Requires:       python313-dbus-python
+Requires:       python3-PyQt6
+Requires:       python3-dbus-python
 Requires:       PackageKit
 BuildRequires:  gettext-tools
 BuildArch:      noarch

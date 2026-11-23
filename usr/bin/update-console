@@ -251,6 +251,7 @@ def pick_mono_font(point_size: int = FONT_POINT_SIZE) -> QFont:
 class AnsiState:
     def __init__(self) -> None:
         self.font_size = FONT_POINT_SIZE
+        self._fmt_cache: dict[tuple, QTextCharFormat] = {}
         self.reset()
 
     def reset(self) -> None:
@@ -295,6 +296,11 @@ class AnsiState:
             self.fg = ANSI_COLORS[self.fg_idx + 8]
 
     def char_format(self) -> QTextCharFormat:
+        # Rebuilt only when the SGR state or font size changes (not per character).
+        key = (self.fg, self.bold, self.dim, self.font_size)
+        cached = self._fmt_cache.get(key)
+        if cached is not None:
+            return cached
         fmt = QTextCharFormat()
         color = QColor(self.fg)
         if self.dim and not self.bold:
@@ -303,6 +309,7 @@ class AnsiState:
         font = pick_mono_font(self.font_size)
         font.setBold(self.bold)
         fmt.setFont(font)
+        self._fmt_cache[key] = fmt
         return fmt
 
 
@@ -1065,11 +1072,22 @@ class ConsoleView(QPlainTextEdit):
             self._updating_scroll = False
 
     def _consume_text(self, text: str) -> None:
+        # Plain characters are accumulated and written in one document edit per
+        # run; any control/escape handling flushes the run first so ordering and
+        # the active SGR format are preserved.
+        run: list[str] = []
+
+        def flush() -> None:
+            if run:
+                self._write_chars("".join(run), self._ansi.char_format())
+                run.clear()
+
         for ch in text:
             if self._in_csi:
                 self._csi_buf += ch
                 # CSI final byte is in 0x40-0x7E.
                 if "@" <= ch <= "~":
+                    flush()
                     self._handle_csi(self._csi_buf)
                     self._csi_buf = ""
                     self._in_csi = False
@@ -1098,20 +1116,25 @@ class ConsoleView(QPlainTextEdit):
                     self._osc_buf = getattr(self, "_osc_buf", "") + ch
                 continue
             if ch == "\x1b":
+                flush()
                 self._in_esc = True
                 continue
             if ch == "\r":
+                flush()
                 self._carriage_return()
                 continue
             if ch == "\b":
+                flush()
                 self._backspace()
                 continue
             if ch == "\n":
+                flush()
                 self._write_newline()
                 continue
             if ch == "\a":
                 continue
-            self._write_chars(ch, self._ansi.char_format())
+            run.append(ch)
+        flush()
 
     def _handle_csi(self, body: str) -> None:
         if not body:

@@ -16,6 +16,7 @@ import struct
 import subprocess
 import sys
 import termios
+import time
 
 from PyQt6.QtCore import Qt, QSocketNotifier, QTimer, pyqtSignal, QObject
 from PyQt6.QtGui import QColor, QFont, QFontDatabase, QIcon, QKeyEvent, QTextCharFormat, QTextCursor
@@ -185,6 +186,8 @@ ANSI_COLORS = [
 DEFAULT_FG = "#dcdcdc"
 DEFAULT_BG = "#000000"
 FONT_POINT_SIZE = 16
+READ_BUDGET_S = 0.008  # max time spent draining the PTY per event-loop turn
+READ_MAX_BYTES = 16384  # max bytes handed to the view per turn (bounds render time)
 
 
 def detect_ui_lang() -> str:
@@ -383,20 +386,48 @@ class PtySession(QObject):
     def _on_readable(self, *_args) -> None:
         if self._master_fd < 0:
             return
+        # Drain the PTY for a short time budget, then hand control back to Qt so
+        # painting and input stay responsive. Unread data waits in the kernel PTY
+        # buffer (the child just blocks on write), so nothing is lost.
+        chunks: list[bytes] = []
+        eof = False
+        total = 0
+        deadline = time.monotonic() + READ_BUDGET_S
         try:
-            for _ in range(8):
+            while True:
                 chunk = os.read(self._master_fd, 8192)
                 if not chunk:
-                    self._cleanup_fd()
-                    return
-                self.output.emit(chunk)
+                    eof = True
+                    break
+                chunks.append(chunk)
+                total += len(chunk)
+                if total >= READ_MAX_BYTES or time.monotonic() >= deadline:
+                    break
                 readable, _, _ = select.select([self._master_fd], [], [], 0)
                 if not readable:
                     break
         except BlockingIOError:
-            return
+            pass
         except OSError:
+            eof = True
+        if chunks:
+            self.output.emit(b"".join(chunks))
+        if eof:
             self._cleanup_fd()
+
+    def _drain_remaining(self) -> None:
+        """Flush output still buffered in the PTY after the child has exited."""
+        chunks: list[bytes] = []
+        while self._master_fd >= 0:
+            try:
+                chunk = os.read(self._master_fd, 65536)
+            except OSError:  # EAGAIN (nothing left) or EIO (slave closed)
+                break
+            if not chunk:
+                break
+            chunks.append(chunk)
+        if chunks:
+            self.output.emit(b"".join(chunks))
 
     def _poll_child(self) -> None:
         if self._proc is None:
@@ -405,6 +436,7 @@ class PtySession(QObject):
         if code is None:
             return
         self._child_timer.stop()
+        self._drain_remaining()
         self._cleanup_fd()
         self.exited.emit(int(code))
         self._proc = None
@@ -1062,8 +1094,13 @@ class ConsoleView(QPlainTextEdit):
             self._utf8_pending = data[exc.start :]
             text = valid.decode("utf-8", errors="replace")
         self._updating_scroll = True
+        edit = QTextCursor(self.document())
         try:
-            self._consume_text(text)
+            edit.beginEditBlock()  # one relayout/signal batch for the whole chunk
+            try:
+                self._consume_text(text)
+            finally:
+                edit.endEditBlock()
             if self._follow_tail:
                 self._snap_cursor_to_input()
                 vbar = self.verticalScrollBar()

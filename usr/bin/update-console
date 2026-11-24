@@ -10,12 +10,12 @@ import os
 import pty
 import re
 import select
-import shutil
 import signal
 import struct
 import subprocess
 import sys
 import termios
+import threading
 import time
 
 from PyQt6.QtCore import Qt, QSocketNotifier, QTimer, pyqtSignal, QObject
@@ -41,6 +41,8 @@ MESSAGES = {
         "press_enter": "\nPress ENTER to exit…\n",
         "process_exited": "\n[update-console] process exited with code {code}\n",
         "prompt_notify": "Action required: {question}",
+        "prompt_notify_continue": "Confirm to proceed with the update.",
+        "notify_action_open": "Open",
         "opt_yes": "Yes",
         "opt_no": "No",
         "opt_view": "View details",
@@ -66,6 +68,8 @@ MESSAGES = {
         "press_enter": "\nPressione ENTER para sair…\n",
         "process_exited": "\n[update-console] processo terminou com código {code}\n",
         "prompt_notify": "Ação necessária: {question}",
+        "prompt_notify_continue": "Confirme para prosseguir com a atualização.",
+        "notify_action_open": "Abrir",
         "opt_yes": "Sim",
         "opt_no": "Não",
         "opt_view": "Ver detalhes",
@@ -91,6 +95,8 @@ MESSAGES = {
         "press_enter": "\nPulse ENTER para salir…\n",
         "process_exited": "\n[update-console] el proceso terminó con código {code}\n",
         "prompt_notify": "Acción requerida: {question}",
+        "prompt_notify_continue": "Confirme para continuar con la actualización.",
+        "notify_action_open": "Abrir",
         "opt_yes": "Sí",
         "opt_no": "No",
         "opt_view": "Ver detalles",
@@ -116,6 +122,8 @@ MESSAGES = {
         "press_enter": "\nDrücken Sie ENTER zum Beenden…\n",
         "process_exited": "\n[update-console] Prozess beendet mit Code {code}\n",
         "prompt_notify": "Aktion erforderlich: {question}",
+        "prompt_notify_continue": "Bestätigen Sie, um mit dem Update fortzufahren.",
+        "notify_action_open": "Öffnen",
         "opt_yes": "Ja",
         "opt_no": "Nein",
         "opt_view": "Details anzeigen",
@@ -141,6 +149,8 @@ MESSAGES = {
         "press_enter": "\n終了するには ENTER を押してください…\n",
         "process_exited": "\n[update-console] プロセスはコード {code} で終了しました\n",
         "prompt_notify": "操作が必要です: {question}",
+        "prompt_notify_continue": "更新を続行するには確認してください。",
+        "notify_action_open": "開く",
         "opt_yes": "はい",
         "opt_no": "いいえ",
         "opt_view": "詳細を表示",
@@ -1378,51 +1388,96 @@ def parse_zypper_prompt(line: str) -> tuple[str, list[str], str | None] | None:
     return question, options, default_opt
 
 
-def send_desktop_notification(summary: str, body: str) -> None:
-    """Send a desktop notification without creating a duplicate tray icon."""
-    if shutil.which("notify-send"):
+_NOTIFY_IFACE = "org.freedesktop.Notifications"
+_CONTINUE_PROMPT_RE = re.compile(
+    r"^\s*(continue|continuar|continuer|fortfahren|続行)\b", re.IGNORECASE
+)
+
+
+def is_continue_question(question: str) -> bool:
+    """True for the generic zypper "Continue? [y/n/...]" confirmation."""
+    return bool(_CONTINUE_PROMPT_RE.match(question))
+
+
+class PromptNotifier(QObject):
+    """Persistent desktop notification that focuses the window when clicked.
+
+    Uses dbus-python with a GLib loop in a daemon thread (same approach as
+    update-viewer); results come back to the Qt thread through signals.
+    """
+
+    activated = pyqtSignal(str)  # XDG activation token (may be empty)
+
+    def __init__(self, parent: QObject | None = None) -> None:
+        super().__init__(parent)
+        self._iface = None
+        self._id = 0
+        self._token = ""
+        self._lock = threading.Lock()
         try:
-            subprocess.Popen(
-                [
-                    "notify-send",
-                    "-i",
-                    "system-software-update",
-                    "-a",
+            import dbus
+            from dbus.mainloop.glib import DBusGMainLoop
+            from gi.repository import GLib
+
+            DBusGMainLoop(set_as_default=True)
+            bus = dbus.SessionBus()
+            proxy = bus.get_object(_NOTIFY_IFACE, "/org/freedesktop/Notifications")
+            self._iface = dbus.Interface(proxy, _NOTIFY_IFACE)
+            bus.add_signal_receiver(
+                self._on_action, "ActionInvoked", _NOTIFY_IFACE, path="/org/freedesktop/Notifications"
+            )
+            bus.add_signal_receiver(
+                self._on_token, "ActivationToken", _NOTIFY_IFACE, path="/org/freedesktop/Notifications"
+            )
+            loop = GLib.MainLoop()
+            threading.Thread(target=loop.run, name="DBus-GLib-Loop", daemon=True).start()
+            self._dbus = dbus
+        except Exception:  # noqa: BLE001 - notifications are best effort
+            self._iface = None
+
+    def show(self, summary: str, body: str, action_label: str) -> None:
+        if self._iface is None:
+            return
+        dbus = self._dbus
+        try:
+            # expire_timeout 0 + critical urgency: the notification never expires.
+            new_id = int(
+                self._iface.Notify(
                     "update-console",
+                    dbus.UInt32(self._id),
+                    "system-software-update",
                     summary,
                     body,
-                ],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
+                    dbus.Array(["default", action_label], signature="s"),
+                    dbus.Dictionary(
+                        {"urgency": dbus.Byte(2), "resident": True},
+                        signature="sv",
+                    ),
+                    dbus.Int32(0),
+                )
             )
-            return
-        except OSError:
+            with self._lock:
+                self._id = new_id
+        except Exception:  # noqa: BLE001
             pass
 
-    if shutil.which("dbus-send"):
-        try:
-            subprocess.Popen(
-                [
-                    "dbus-send",
-                    "--session",
-                    "--type=method_call",
-                    "--dest=org.freedesktop.Notifications",
-                    "/org/freedesktop/Notifications",
-                    "org.freedesktop.Notifications.Notify",
-                    "string:update-console",
-                    "uint32:0",
-                    "string:system-software-update",
-                    f"string:{summary}",
-                    f"string:{body}",
-                    "array:string:",
-                    "dict:string:string:",
-                    "int32:8000",
-                ],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
-        except OSError:
-            pass
+    def close(self) -> None:
+        with self._lock:
+            nid, self._id = self._id, 0
+        if nid and self._iface is not None:
+            try:
+                self._iface.CloseNotification(self._dbus.UInt32(nid))
+            except Exception:  # noqa: BLE001
+                pass
+
+    def _on_token(self, nid, token) -> None:  # GLib thread
+        if int(nid) == self._id:
+            self._token = str(token)
+
+    def _on_action(self, nid, action) -> None:  # GLib thread
+        if int(nid) == self._id and str(action) == "default":
+            token, self._token = self._token, ""
+            self.activated.emit(token)
 
 
 class UpdateConsoleWindow(QMainWindow):
@@ -1434,6 +1489,8 @@ class UpdateConsoleWindow(QMainWindow):
         self._awaiting_exit = False
         self._active_prompt_sig: tuple[int, tuple[str, ...]] | None = None
         self._notified_prompt_sig: tuple[int, tuple[str, ...]] | None = None
+        self._notifier = PromptNotifier(self)
+        self._notifier.activated.connect(self._bring_to_front)
         self._typed_shortcut = ""
         self._prompt_block_num: int | None = None
         self._prompt_base_text: str | None = None
@@ -1467,6 +1524,7 @@ class UpdateConsoleWindow(QMainWindow):
         self.view.setFocus(Qt.FocusReason.ActiveWindowFocusReason)
 
     def closeEvent(self, event) -> None:  # noqa: N802
+        self._notifier.close()
         self._prompt_timer.stop()
         if self._session is not None:
             self._session.terminate()
@@ -1497,7 +1555,20 @@ class UpdateConsoleWindow(QMainWindow):
             self.view._reposition_prompt_buttons()
         self._prompt_timer.start()
 
+    def _bring_to_front(self, token: str = "") -> None:
+        if token:
+            os.environ["XDG_ACTIVATION_TOKEN"] = token
+        if self.isMinimized():
+            self.showNormal()
+        self.raise_()
+        self.activateWindow()
+        handle = self.windowHandle()
+        if handle is not None:
+            handle.requestActivate()
+        self.view.setFocus(Qt.FocusReason.ActiveWindowFocusReason)
+
     def _clear_active_prompt(self) -> None:
+        self._notifier.close()
         self._active_prompt_sig = None
         self._typed_shortcut = ""
         self._prompt_block_num = None
@@ -1561,10 +1632,13 @@ class UpdateConsoleWindow(QMainWindow):
 
             if sig != self._notified_prompt_sig and not self.isActiveWindow():
                 self._notified_prompt_sig = sig
-                send_desktop_notification(
-                    tr("window_title"),
-                    tr("prompt_notify", question=last_block.text().strip()),
+                question = _question.strip()
+                body = (
+                    tr("prompt_notify_continue")
+                    if is_continue_question(question)
+                    else tr("prompt_notify", question=last_block.text().strip())
                 )
+                self._notifier.show(tr("window_title"), body, tr("notify_action_open"))
             return
 
         if (

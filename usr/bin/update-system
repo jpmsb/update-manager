@@ -189,6 +189,7 @@ phase() {
 
 ok()   { printf '  %s %s\n' "$(_c '1;32' '✓')" "$1"; }
 warn() { printf '  %s %s\n' "$(_c '1;33' '!')" "$1"; }
+upd()  { printf '  %s %s\n' "$(_c '1;36' '↑')" "$1"; }
 err()  { printf '  %s %s\n' "$(_c '1;31' '✗')" "$1"; }
 info() { printf '  %s %s\n' "$(_c '2' '·')" "$1"; }
 
@@ -349,7 +350,7 @@ print(url)
 
     stop_spin
     phase "$(msg phase_self)"
-    warn "$(msg self_updating): $current → $tag"
+    upd "$(msg self_updating): $current → $tag"
     info "$(msg self_installing)…"
 
     tmp_rpm=$(mktemp /tmp/update-manager-XXXXXX.rpm)

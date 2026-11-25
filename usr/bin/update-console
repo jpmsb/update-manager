@@ -547,6 +547,19 @@ class ConsoleView(QPlainTextEdit):
                 background-color: #2e7d62;
                 border: 2px solid #56d364;
             }
+            QPushButton[negativeOption='true'] {
+                background-color: #5c1f24;
+                color: #ffffff;
+                border: 1px solid #da3633;
+            }
+            QPushButton[negativeOption='true']:hover {
+                background-color: #7a2a30;
+                border-color: #f85149;
+            }
+            QPushButton[negativeOption='true'][selected='true'] {
+                background-color: #8e2c33;
+                border: 2px solid #ff7b72;
+            }
         """
 
         self._help_button_qss = """
@@ -583,6 +596,19 @@ class ConsoleView(QPlainTextEdit):
             QPushButton[defaultOption='true'][selected='true'] {
                 background-color: #2e7d62;
                 border: 2px solid #56d364;
+            }
+            QPushButton[negativeOption='true'] {
+                background-color: #5c1f24;
+                color: #ffffff;
+                border: 1px solid #da3633;
+            }
+            QPushButton[negativeOption='true']:hover {
+                background-color: #7a2a30;
+                border-color: #f85149;
+            }
+            QPushButton[negativeOption='true'][selected='true'] {
+                background-color: #8e2c33;
+                border: 2px solid #ff7b72;
             }
         """
 
@@ -731,6 +757,8 @@ class ConsoleView(QPlainTextEdit):
             btn.setCursor(Qt.CursorShape.PointingHandCursor)
             if opt == default_opt:
                 btn.setProperty("defaultOption", "true")
+            if opt.lower() in ("n", "no", "não", "nein"):
+                btn.setProperty("negativeOption", "true")
             btn.clicked.connect(lambda _checked=False, o=opt: self.prompt_option_clicked.emit(o))
             self._btn_layout.addWidget(btn)
             self._prompt_buttons.append(btn)
@@ -766,6 +794,8 @@ class ConsoleView(QPlainTextEdit):
             hbtn.setProperty("optKey", opt_key)
             if opt_key == default_opt:
                 hbtn.setProperty("defaultOption", "true")
+            if opt_key.lower() in ("n", "no", "não", "nein"):
+                hbtn.setProperty("negativeOption", "true")
             hbtn.clicked.connect(lambda _checked=False, o=opt_key: self.prompt_option_clicked.emit(o))
             self._help_buttons.append((block_num, start_col, btn_label, hbtn))
 
@@ -850,6 +880,7 @@ class ConsoleView(QPlainTextEdit):
         cancel_btn = QPushButton(tr("btn_cancel"), self._btn_container)
         cancel_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         cancel_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        cancel_btn.setProperty("negativeOption", "true")
         cancel_btn.clicked.connect(self.prompt_clear_clicked.emit)
         self._btn_layout.addWidget(cancel_btn)
         self._prompt_buttons.append(cancel_btn)

@@ -40,6 +40,10 @@ MESSAGES = {
         "window_title": "Install updates",
         "press_enter": "\nPress ENTER to exit…\n",
         "process_exited": "\n[update-console] process exited with code {code}\n",
+        "auth_title": "Authentication cancelled",
+        "auth_body": "No update was performed.",
+        "auth_waiting": "Waiting for authentication…",
+        "auth_closing": "Closing in {n} s (or press ENTER)…",
         "prompt_notify": "Action required: {question}",
         "prompt_notify_continue": "Confirm to proceed with the update.",
         "notify_action_open": "Open",
@@ -67,6 +71,10 @@ MESSAGES = {
         "window_title": "Instalar atualizações",
         "press_enter": "\nPressione ENTER para sair…\n",
         "process_exited": "\n[update-console] processo terminou com código {code}\n",
+        "auth_title": "Autenticação cancelada",
+        "auth_body": "Nenhuma atualização foi feita.",
+        "auth_waiting": "Aguardando autenticação…",
+        "auth_closing": "Fechando em {n} s (ou pressione ENTER)…",
         "prompt_notify": "Ação necessária: {question}",
         "prompt_notify_continue": "Confirme para prosseguir com a atualização.",
         "notify_action_open": "Abrir",
@@ -94,6 +102,10 @@ MESSAGES = {
         "window_title": "Instalar actualizaciones",
         "press_enter": "\nPulse ENTER para salir…\n",
         "process_exited": "\n[update-console] el proceso terminó con código {code}\n",
+        "auth_title": "Autenticación cancelada",
+        "auth_body": "No se realizó ninguna actualización.",
+        "auth_waiting": "Esperando autenticación…",
+        "auth_closing": "Cerrando en {n} s (o pulse ENTER)…",
         "prompt_notify": "Acción requerida: {question}",
         "prompt_notify_continue": "Confirme para continuar con la actualización.",
         "notify_action_open": "Abrir",
@@ -121,6 +133,10 @@ MESSAGES = {
         "window_title": "Aktualisierungen installieren",
         "press_enter": "\nDrücken Sie ENTER zum Beenden…\n",
         "process_exited": "\n[update-console] Prozess beendet mit Code {code}\n",
+        "auth_title": "Authentifizierung abgebrochen",
+        "auth_body": "Es wurde kein Update durchgeführt.",
+        "auth_waiting": "Warte auf Authentifizierung…",
+        "auth_closing": "Schließt in {n} s (oder ENTER drücken)…",
         "prompt_notify": "Aktion erforderlich: {question}",
         "prompt_notify_continue": "Bestätigen Sie, um mit dem Update fortzufahren.",
         "notify_action_open": "Öffnen",
@@ -148,6 +164,10 @@ MESSAGES = {
         "window_title": "更新をインストール",
         "press_enter": "\n終了するには ENTER を押してください…\n",
         "process_exited": "\n[update-console] プロセスはコード {code} で終了しました\n",
+        "auth_title": "認証がキャンセルされました",
+        "auth_body": "更新は行われていません。",
+        "auth_waiting": "認証を待っています…",
+        "auth_closing": "{n} 秒後に閉じます (ENTER で今すぐ閉じる)…",
         "prompt_notify": "操作が必要です: {question}",
         "prompt_notify_continue": "更新を続行するには確認してください。",
         "notify_action_open": "開く",
@@ -184,7 +204,7 @@ ANSI_COLORS = [
     "#00cdcd",  # 6 cyan
     "#e5e5e5",  # 7 white
     "#7f7f7f",  # 8 bright black
-    "#ff0000",  # 9 bright red
+    "#ff5f5f",  # 9 bright red (lightened for contrast on the dark background)
     "#00ff00",  # 10 bright green
     "#ffff00",  # 11 bright yellow
     "#5c5cff",  # 12 bright blue
@@ -1149,6 +1169,32 @@ class ConsoleView(QPlainTextEdit):
         finally:
             self._updating_scroll = False
 
+    def remove_lines(self, texts: tuple[str, ...]) -> None:
+        """Delete finished lines whose text equals one of ``texts`` (plus the blank line after each)."""
+        doc = self.document()
+        last = doc.lastBlock().blockNumber()
+        edit = QTextCursor(doc)
+        edit.beginEditBlock()
+        try:
+            block = doc.firstBlock()
+            while block.isValid() and block.blockNumber() < last:
+                if block.text().strip() in texts:
+                    num = block.blockNumber()
+                    nxt = block.next()
+                    end = block.position() + block.length()
+                    if nxt.isValid() and nxt.blockNumber() < last and not nxt.text().strip():
+                        end += nxt.length()
+                    cur = QTextCursor(doc)
+                    cur.setPosition(block.position())
+                    cur.setPosition(min(end, doc.characterCount() - 1), QTextCursor.MoveMode.KeepAnchor)
+                    cur.removeSelectedText()
+                    last = doc.lastBlock().blockNumber()
+                    block = doc.findBlockByNumber(num)
+                    continue
+                block = block.next()
+        finally:
+            edit.endEditBlock()
+
     def _consume_text(self, text: str) -> None:
         # Plain characters are accumulated and written in one document edit per
         # run; any control/escape handling flushes the run first so ordering and
@@ -1572,13 +1618,20 @@ class UpdateConsoleWindow(QMainWindow):
             here = os.path.abspath(os.path.join(os.path.dirname(__file__), "update-system"))
             if os.path.isfile(here):
                 argv = ["/usr/bin/pkexec", here, "--root"]
+        self._got_output = False
+        self._waiting_text = f"● {tr('auth_waiting')}"
         self._session = PtySession(argv, self)
         self.view._is_canonical = self._session.is_canonical
         self._session.output.connect(self._on_pty_output)
         self._session.exited.connect(self._on_exited)
         self._sync_winsize()
+        self.view.feed(f"\x1b[1;36m●\x1b[0m \x1b[2m{tr('auth_waiting')}\x1b[0m\n\n".encode("utf-8"))
 
     def _on_pty_output(self, data: bytes) -> None:
+        if not self._got_output:
+            # First output: pkexec auth is over (or failed); drop the waiting hint.
+            self._got_output = True
+            self.view.remove_lines((self._waiting_text,))
         self.view.feed(data)
         if b"\n" in data:
             self._clear_active_prompt()
@@ -1732,10 +1785,40 @@ class UpdateConsoleWindow(QMainWindow):
         self._prompt_timer.stop()
         self._clear_active_prompt()
         self._poll_update_viewer()
+        self.view.remove_lines((self._waiting_text,))
+        if code in PKEXEC_AUTH_FAILURE_CODES:
+            self.view.remove_lines(PKEXEC_NOISE_LINES)
+            self.view.feed(
+                f"\n  \x1b[1;31m✗ {tr('auth_title')}\x1b[0m\n    \x1b[1;97m{tr('auth_body')}\x1b[0m\n".encode("utf-8")
+            )
+            self._awaiting_exit = True
+            self._auto_close_left = AUTH_AUTO_CLOSE_SECONDS
+            self._auto_close_tick(first=True)
+            return
         if code != 0:
             self.view.feed(tr("process_exited", code=code).encode("utf-8"))
         self.view.feed(tr("press_enter").encode("utf-8"))
         self._awaiting_exit = True
+
+    def _auto_close_tick(self, first: bool = False) -> None:
+        """Rewrite the countdown line in place, then close the window at zero."""
+        if self._auto_close_left <= 0:
+            self.close()
+            return
+        prefix = "\n" if first else "\r\x1b[2K"
+        self.view.feed(f"{prefix}\x1b[1;97m{tr('auth_closing', n=self._auto_close_left)}\x1b[0m".encode("utf-8"))
+        self._auto_close_left -= 1
+        QTimer.singleShot(1000, self._auto_close_tick)
+
+
+# pkexec exit codes: 126 = not authorized, 127 = dialog dismissed or not shown.
+PKEXEC_AUTH_FAILURE_CODES = (126, 127)
+AUTH_AUTO_CLOSE_SECONDS = 5
+# Untranslated pkexec output replaced by our own message on those codes.
+PKEXEC_NOISE_LINES = (
+    "Error executing command as another user: Not authorized",
+    "This incident has been reported.",
+)
 
 
 def main() -> int:

@@ -45,6 +45,7 @@ MESSAGES = {
         "final_ok": "Update finished successfully.",
         "final_fail": "Update failed (exit code {code}).",
         "final_cancelled": "Update cancelled.",
+        "stopping": "Stopping the update…",
         "auth_title": "Authentication cancelled",
         "auth_body": "No update was performed.",
         "auth_waiting": "Waiting for authentication…",
@@ -80,6 +81,7 @@ MESSAGES = {
         "final_ok": "Atualização concluída com sucesso.",
         "final_fail": "A atualização falhou (código {code}).",
         "final_cancelled": "Atualização cancelada.",
+        "stopping": "Interrompendo a atualização…",
         "auth_title": "Autenticação cancelada",
         "auth_body": "Nenhuma atualização foi feita.",
         "auth_waiting": "Aguardando autenticação…",
@@ -115,6 +117,7 @@ MESSAGES = {
         "final_ok": "Actualización completada correctamente.",
         "final_fail": "La actualización falló (código {code}).",
         "final_cancelled": "Actualización cancelada.",
+        "stopping": "Deteniendo la actualización…",
         "auth_title": "Autenticación cancelada",
         "auth_body": "No se realizó ninguna actualización.",
         "auth_waiting": "Esperando autenticación…",
@@ -150,6 +153,7 @@ MESSAGES = {
         "final_ok": "Aktualisierung erfolgreich abgeschlossen.",
         "final_fail": "Aktualisierung fehlgeschlagen (Code {code}).",
         "final_cancelled": "Aktualisierung abgebrochen.",
+        "stopping": "Aktualisierung wird angehalten…",
         "auth_title": "Authentifizierung abgebrochen",
         "auth_body": "Es wurde kein Update durchgeführt.",
         "auth_waiting": "Warte auf Authentifizierung…",
@@ -185,6 +189,7 @@ MESSAGES = {
         "final_ok": "更新が正常に完了しました。",
         "final_fail": "更新に失敗しました (コード {code})。",
         "final_cancelled": "更新はキャンセルされました。",
+        "stopping": "更新を停止しています…",
         "auth_title": "認証がキャンセルされました",
         "auth_body": "更新は行われていません。",
         "auth_waiting": "認証を待っています…",
@@ -511,29 +516,29 @@ class PtySession(QObject):
                 pass
             self._master_fd = -1
 
-    def terminate(self, grace_s: float = TERMINATE_GRACE_S) -> None:
-        proc = self._proc
-        if proc is None or proc.poll() is not None:
-            return
-        # 1) Ctrl+C through the PTY: the line discipline sends SIGINT to the
-        #    foreground group whatever its UID, so zypper can abort cleanly.
+    def is_running(self) -> bool:
+        return self._proc is not None and self._proc.poll() is None
+
+    def interrupt(self) -> None:
+        """Ctrl+C through the PTY: the line discipline sends SIGINT to the foreground
+        group whatever its UID, so the root-owned zypper can abort cleanly."""
         self.write(b"\x03")
-        deadline = time.monotonic() + grace_s
-        while proc.poll() is None and time.monotonic() < deadline:
-            time.sleep(0.05)
-        # 2) Still running: closing the master hangs the terminal up (SIGHUP).
-        if proc.poll() is None:
-            self._cleanup_fd()
-            time.sleep(0.5)
-        # 3) Last resort, only effective for processes we are allowed to signal.
-        if proc.poll() is None:
+
+    def hangup(self) -> None:
+        """Close the PTY master: the kernel hangs the terminal up (SIGHUP)."""
+        self._cleanup_fd()
+
+    def kill_fallback(self) -> None:
+        """Last resort, only effective for processes we are allowed to signal."""
+        if self._proc is None or self._proc.poll() is not None:
+            return
+        try:
+            os.killpg(self._proc.pid, signal.SIGTERM)
+        except OSError:
             try:
-                os.killpg(self._proc.pid, signal.SIGTERM)
+                self._proc.terminate()
             except OSError:
-                try:
-                    self._proc.terminate()
-                except OSError:
-                    pass
+                pass
 
 
 class ConsoleView(QPlainTextEdit):
@@ -1643,6 +1648,12 @@ class UpdateConsoleWindow(QMainWindow):
         self._prompt_base_text: str | None = None
         self._confirm_mode = False
         self._got_output = False
+        self._closing = False  # shutdown of the running upgrade in progress
+        self._close_ready = False  # closeEvent may now accept
+
+        self._stop_timer = QTimer(self)  # grace period before escalating to SIGHUP
+        self._stop_timer.setSingleShot(True)
+        self._stop_timer.timeout.connect(self._escalate_shutdown)
 
         self._prompt_timer = QTimer(self)
         self._prompt_timer.setSingleShot(True)
@@ -1672,7 +1683,17 @@ class UpdateConsoleWindow(QMainWindow):
         self.view.setFocus(Qt.FocusReason.ActiveWindowFocusReason)
 
     def closeEvent(self, event) -> None:  # noqa: N802
-        if self._session is not None and not self._awaiting_exit and self._got_output:
+        running = self._session is not None and self._session.is_running()
+        if self._close_ready or not running:
+            self._notifier.close()
+            self._prompt_timer.stop()
+            self._stop_timer.stop()
+            super().closeEvent(event)
+            return
+        event.ignore()  # the window closes once the upgrade has really stopped
+        if self._closing:
+            return
+        if self._got_output and not self._awaiting_exit:
             answer = QMessageBox.warning(
                 self,
                 tr("close_title"),
@@ -1681,13 +1702,32 @@ class UpdateConsoleWindow(QMainWindow):
                 QMessageBox.StandardButton.No,
             )
             if answer != QMessageBox.StandardButton.Yes:
-                event.ignore()
                 return
-        self._notifier.close()
+        self._begin_shutdown()
+
+    def _begin_shutdown(self) -> None:
+        """Ask the upgrade to abort (Ctrl+C) without blocking the event loop."""
+        self._closing = True
+        self._awaiting_exit = True  # stop forwarding input to the PTY
         self._prompt_timer.stop()
-        if self._session is not None:
-            self._session.terminate()
-        super().closeEvent(event)
+        self._clear_active_prompt()
+        self.view.feed(f"\n\x1b[1;33m● {tr('stopping')}\x1b[0m\n".encode("utf-8"))
+        self._session.interrupt()
+        self._stop_timer.start(int(TERMINATE_GRACE_S * 1000))
+
+    def _escalate_shutdown(self) -> None:
+        if self._session is not None and self._session.is_running():
+            self._session.hangup()
+            QTimer.singleShot(1000, lambda: self._finish_close(force=True))
+        else:
+            self._finish_close()
+
+    def _finish_close(self, force: bool = False) -> None:
+        self._stop_timer.stop()
+        if force and self._session is not None:
+            self._session.kill_fallback()
+        self._close_ready = True
+        self.close()
 
     def resizeEvent(self, event) -> None:  # noqa: N802
         super().resizeEvent(event)
@@ -1868,6 +1908,9 @@ class UpdateConsoleWindow(QMainWindow):
         # --root ends after the upgrade; prompt locally (like wait_for_enter).
         self._prompt_timer.stop()
         self._clear_active_prompt()
+        if self._closing:
+            self._finish_close()
+            return
         self._poll_update_viewer()
         self.view.remove_lines((self._waiting_text,))
         # 126 is pkexec's "not authorized / dismissed". 127 is also "command not found" or

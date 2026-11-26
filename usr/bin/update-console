@@ -34,6 +34,8 @@ from PyQt6.QtWidgets import (
 )
 
 UPDATE_SYSTEM = "/usr/bin/update-system"
+SETSID = "/usr/bin/setsid"
+TERMINATE_GRACE_S = 3.0  # time given to zypper to abort cleanly after Ctrl+C
 
 # User-visible strings (aligned with update-viewer: en, pt, es, de, ja)
 MESSAGES = {
@@ -388,12 +390,17 @@ class PtySession(QObject):
         env["COLORTERM"] = "truecolor"
 
         # subprocess + PTY avoids a manual fork/exec after Qt threads start.
+        # `setsid --ctty` makes the PTY the child's controlling terminal, like a real
+        # terminal emulator. The kernel then delivers Ctrl+C (SIGINT) and, when the
+        # master closes, SIGHUP to the root-owned upgrade, which an unprivileged
+        # process cannot signal directly (EPERM).
+        use_ctty = os.access(SETSID, os.X_OK)
         self._proc = subprocess.Popen(
-            argv,
+            [SETSID, "--ctty", *argv] if use_ctty else argv,
             stdin=slave_fd,
             stdout=slave_fd,
             stderr=slave_fd,
-            start_new_session=True,
+            start_new_session=not use_ctty,
             env=env,
             close_fds=True,
         )
@@ -504,8 +511,22 @@ class PtySession(QObject):
                 pass
             self._master_fd = -1
 
-    def terminate(self) -> None:
-        if self._proc is not None and self._proc.poll() is None:
+    def terminate(self, grace_s: float = TERMINATE_GRACE_S) -> None:
+        proc = self._proc
+        if proc is None or proc.poll() is not None:
+            return
+        # 1) Ctrl+C through the PTY: the line discipline sends SIGINT to the
+        #    foreground group whatever its UID, so zypper can abort cleanly.
+        self.write(b"\x03")
+        deadline = time.monotonic() + grace_s
+        while proc.poll() is None and time.monotonic() < deadline:
+            time.sleep(0.05)
+        # 2) Still running: closing the master hangs the terminal up (SIGHUP).
+        if proc.poll() is None:
+            self._cleanup_fd()
+            time.sleep(0.5)
+        # 3) Last resort, only effective for processes we are allowed to signal.
+        if proc.poll() is None:
             try:
                 os.killpg(self._proc.pid, signal.SIGTERM)
             except OSError:

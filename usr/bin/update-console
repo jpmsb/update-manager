@@ -46,6 +46,8 @@ MESSAGES = {
         "final_fail": "Update failed (exit code {code}).",
         "final_cancelled": "Update cancelled.",
         "stopping": "Stopping the update…",
+        "stopping_wait": "Still stopping… the window closes when the update ends. Close again to leave it running in the background.",
+        "hint_4": "The package manager reported an error. See the messages above.",
         "hint_6": "No repositories are configured.",
         "hint_7": "Another program is using the package manager. Close it and try again.",
         "hint_8": "Installing the packages failed. See the messages above.",
@@ -87,6 +89,8 @@ MESSAGES = {
         "final_fail": "A atualização falhou (código {code}).",
         "final_cancelled": "Atualização cancelada.",
         "stopping": "Interrompendo a atualização…",
+        "stopping_wait": "Ainda interrompendo… a janela fecha quando a atualização terminar. Feche de novo para deixá-la rodando em segundo plano.",
+        "hint_4": "O gerenciador de pacotes relatou um erro. Veja as mensagens acima.",
         "hint_6": "Nenhum repositório está configurado.",
         "hint_7": "Outro programa está usando o gerenciador de pacotes. Feche-o e tente novamente.",
         "hint_8": "A instalação dos pacotes falhou. Veja as mensagens acima.",
@@ -128,6 +132,8 @@ MESSAGES = {
         "final_fail": "La actualización falló (código {code}).",
         "final_cancelled": "Actualización cancelada.",
         "stopping": "Deteniendo la actualización…",
+        "stopping_wait": "Aún deteniendo… la ventana se cierra cuando termine la actualización. Ciérrela de nuevo para dejarla en segundo plano.",
+        "hint_4": "El gestor de paquetes informó de un error. Consulte los mensajes anteriores.",
         "hint_6": "No hay repositorios configurados.",
         "hint_7": "Otro programa está usando el gestor de paquetes. Ciérrelo e inténtelo de nuevo.",
         "hint_8": "Falló la instalación de los paquetes. Consulte los mensajes anteriores.",
@@ -169,6 +175,8 @@ MESSAGES = {
         "final_fail": "Aktualisierung fehlgeschlagen (Code {code}).",
         "final_cancelled": "Aktualisierung abgebrochen.",
         "stopping": "Aktualisierung wird angehalten…",
+        "stopping_wait": "Wird noch angehalten… das Fenster schließt, sobald die Aktualisierung endet. Erneut schließen, um sie im Hintergrund weiterlaufen zu lassen.",
+        "hint_4": "Die Paketverwaltung hat einen Fehler gemeldet. Siehe die Meldungen oben.",
         "hint_6": "Es sind keine Repositories konfiguriert.",
         "hint_7": "Ein anderes Programm verwendet die Paketverwaltung. Schließen Sie es und versuchen Sie es erneut.",
         "hint_8": "Die Installation der Pakete ist fehlgeschlagen. Siehe die Meldungen oben.",
@@ -210,6 +218,8 @@ MESSAGES = {
         "final_fail": "更新に失敗しました (コード {code})。",
         "final_cancelled": "更新はキャンセルされました。",
         "stopping": "更新を停止しています…",
+        "stopping_wait": "まだ停止中です… 更新が終わるとウィンドウは閉じます。もう一度閉じると、バックグラウンドで実行を続けます。",
+        "hint_4": "パッケージ管理がエラーを報告しました。上のメッセージを確認してください。",
         "hint_6": "リポジトリが設定されていません。",
         "hint_7": "別のプログラムがパッケージ管理を使用中です。終了してからやり直してください。",
         "hint_8": "パッケージのインストールに失敗しました。上のメッセージを確認してください。",
@@ -1696,6 +1706,7 @@ class UpdateConsoleWindow(QMainWindow):
         self._got_output = False
         self._closing = False  # shutdown of the running upgrade in progress
         self._close_ready = False  # closeEvent may now accept
+        self._shutdown_waiting = False  # signals sent, still waiting for the upgrade to end
 
         self._stop_timer = QTimer(self)  # grace period before escalating to SIGHUP
         self._stop_timer.setSingleShot(True)
@@ -1738,6 +1749,9 @@ class UpdateConsoleWindow(QMainWindow):
             return
         event.ignore()  # the window closes once the upgrade has really stopped
         if self._closing:
+            if self._shutdown_waiting:
+                # The user insisted: leave the upgrade running in the background.
+                QTimer.singleShot(0, self._finish_close)
             return
         if self._got_output and not self._awaiting_exit:
             answer = QMessageBox.warning(
@@ -1764,14 +1778,22 @@ class UpdateConsoleWindow(QMainWindow):
     def _escalate_shutdown(self) -> None:
         if self._session is not None and self._session.is_running():
             self._session.hangup()
-            QTimer.singleShot(1000, lambda: self._finish_close(force=True))
+            QTimer.singleShot(1000, self._after_hangup)
         else:
             self._finish_close()
 
-    def _finish_close(self, force: bool = False) -> None:
+    def _after_hangup(self) -> None:
+        if self._session is None or not self._session.is_running():
+            self._finish_close()
+            return
+        self._session.kill_fallback()
+        # zypper may be finishing the current package: keep the window and wait for
+        # _on_exited instead of orphaning a root process silently.
+        self._shutdown_waiting = True
+        self.view.feed(f"\x1b[1;33m● {tr('stopping_wait')}\x1b[0m\n".encode("utf-8"))
+
+    def _finish_close(self) -> None:
         self._stop_timer.stop()
-        if force and self._session is not None:
-            self._session.kill_fallback()
         self._close_ready = True
         self.close()
 

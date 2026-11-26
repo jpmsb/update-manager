@@ -46,6 +46,11 @@ MESSAGES = {
         "final_fail": "Update failed (exit code {code}).",
         "final_cancelled": "Update cancelled.",
         "stopping": "Stopping the update…",
+        "hint_6": "No repositories are configured.",
+        "hint_7": "Another program is using the package manager. Close it and try again.",
+        "hint_8": "Installing the packages failed. See the messages above.",
+        "hint_106": "Some repositories were skipped (unreachable or invalid).",
+        "hint_107": "A package script failed. See the messages above.",
         "auth_title": "Authentication cancelled",
         "auth_body": "No update was performed.",
         "auth_waiting": "Waiting for authentication…",
@@ -82,6 +87,11 @@ MESSAGES = {
         "final_fail": "A atualização falhou (código {code}).",
         "final_cancelled": "Atualização cancelada.",
         "stopping": "Interrompendo a atualização…",
+        "hint_6": "Nenhum repositório está configurado.",
+        "hint_7": "Outro programa está usando o gerenciador de pacotes. Feche-o e tente novamente.",
+        "hint_8": "A instalação dos pacotes falhou. Veja as mensagens acima.",
+        "hint_106": "Alguns repositórios foram ignorados (inacessíveis ou inválidos).",
+        "hint_107": "Um script de pacote falhou. Veja as mensagens acima.",
         "auth_title": "Autenticação cancelada",
         "auth_body": "Nenhuma atualização foi feita.",
         "auth_waiting": "Aguardando autenticação…",
@@ -118,6 +128,11 @@ MESSAGES = {
         "final_fail": "La actualización falló (código {code}).",
         "final_cancelled": "Actualización cancelada.",
         "stopping": "Deteniendo la actualización…",
+        "hint_6": "No hay repositorios configurados.",
+        "hint_7": "Otro programa está usando el gestor de paquetes. Ciérrelo e inténtelo de nuevo.",
+        "hint_8": "Falló la instalación de los paquetes. Consulte los mensajes anteriores.",
+        "hint_106": "Se omitieron algunos repositorios (inaccesibles o no válidos).",
+        "hint_107": "Falló un script de un paquete. Consulte los mensajes anteriores.",
         "auth_title": "Autenticación cancelada",
         "auth_body": "No se realizó ninguna actualización.",
         "auth_waiting": "Esperando autenticación…",
@@ -154,6 +169,11 @@ MESSAGES = {
         "final_fail": "Aktualisierung fehlgeschlagen (Code {code}).",
         "final_cancelled": "Aktualisierung abgebrochen.",
         "stopping": "Aktualisierung wird angehalten…",
+        "hint_6": "Es sind keine Repositories konfiguriert.",
+        "hint_7": "Ein anderes Programm verwendet die Paketverwaltung. Schließen Sie es und versuchen Sie es erneut.",
+        "hint_8": "Die Installation der Pakete ist fehlgeschlagen. Siehe die Meldungen oben.",
+        "hint_106": "Einige Repositories wurden übersprungen (nicht erreichbar oder ungültig).",
+        "hint_107": "Ein Paketskript ist fehlgeschlagen. Siehe die Meldungen oben.",
         "auth_title": "Authentifizierung abgebrochen",
         "auth_body": "Es wurde kein Update durchgeführt.",
         "auth_waiting": "Warte auf Authentifizierung…",
@@ -190,6 +210,11 @@ MESSAGES = {
         "final_fail": "更新に失敗しました (コード {code})。",
         "final_cancelled": "更新はキャンセルされました。",
         "stopping": "更新を停止しています…",
+        "hint_6": "リポジトリが設定されていません。",
+        "hint_7": "別のプログラムがパッケージ管理を使用中です。終了してからやり直してください。",
+        "hint_8": "パッケージのインストールに失敗しました。上のメッセージを確認してください。",
+        "hint_106": "一部のリポジトリがスキップされました (到達不能または無効)。",
+        "hint_107": "パッケージのスクリプトが失敗しました。上のメッセージを確認してください。",
         "auth_title": "認証がキャンセルされました",
         "auth_body": "更新は行われていません。",
         "auth_waiting": "認証を待っています…",
@@ -287,6 +312,13 @@ def tr(key: str, **kwargs) -> str:
     table = MESSAGES.get(lang) or MESSAGES["en"]
     text = table.get(key) or MESSAGES["en"][key]
     return text.format(**kwargs) if kwargs else text
+
+
+def exit_hint(code: int) -> str | None:
+    """Short explanation for well-known zypper exit codes (None when there is none)."""
+    key = f"hint_{code}"
+    table = MESSAGES.get(detect_ui_lang()) or MESSAGES["en"]
+    return table.get(key) or MESSAGES["en"].get(key)
 
 
 def window_title() -> str:
@@ -1232,13 +1264,26 @@ class ConsoleView(QPlainTextEdit):
             block = block.next()
         return False
 
-    def declined_continue(self) -> bool:
-        """True if the last answered "Continue?" prompt was answered with a negative option."""
+    def declined_prompt(self) -> bool:
+        """True if the last answered y/n-style prompt got a negative answer (user chose to stop).
+
+        Only counts when little output follows it, so a "no" early in a long run
+        that later failed for another reason is still reported as a failure.
+        """
         block = self.document().lastBlock()
+        lines_after = 0
         while block.isValid():
-            m = _ANSWERED_PROMPT_RE.match(block.text().rstrip())
-            if m and is_continue_question(m.group(1).strip()):
-                return m.group(2).lower() in NEGATIVE_ANSWERS
+            text = block.text().rstrip()
+            m = _ANSWERED_PROMPT_RE.match(text)
+            if m and "/" in m.group(2):
+                options = [o.strip().lower() for o in m.group(2).split("/")]
+                answer = m.group(3).lower()
+                negative = answer in NEGATIVE_ANSWERS or (
+                    answer == "a" and "r" in options and "i" in options  # Abort/Retry/Ignore
+                )
+                return negative and lines_after <= DECLINE_TRAILING_LINES
+            if text.strip():
+                lines_after += 1
             block = block.previous()
         return False
 
@@ -1450,8 +1495,9 @@ class ConsoleView(QPlainTextEdit):
 
 
 _PROMPT_RE = re.compile(r"^(.*?)\[([^\[\]\n]+)\](?:\s*\(([^()\n]+)\))?\s*[:?]\s*$")
-_ANSWERED_PROMPT_RE = re.compile(r"^(.*?)\[[^\[\]\n]+\](?:\s*\([^()\n]+\))?\s*[:?]\s*(\S+)$")
+_ANSWERED_PROMPT_RE = re.compile(r"^(.*?)\[([^\[\]\n]+)\](?:\s*\([^()\n]+\))?\s*[:?]\s*(\S+)$")
 NEGATIVE_ANSWERS = ("n", "no", "não", "nein")
+DECLINE_TRAILING_LINES = 6  # max non-blank lines after a declined prompt
 _HELP_OPT_RE = re.compile(r"^\s*(#\d+\s*:\s*([^\s]+))\s+-\s+.+$")
 
 
@@ -1885,29 +1931,35 @@ class UpdateConsoleWindow(QMainWindow):
             self._session.write(data)
 
     def _poll_update_viewer(self) -> None:
-        try:
-            subprocess.run(
-                [
-                    "timeout",
-                    "3",
-                    "dbus-send",
-                    "--session",
-                    "--type=method_call",
-                    "--dest=org.updateViewer",
-                    "/org/updateViewer",
-                    "org.updateViewer.Manager.poll_updates",
-                ],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                check=False,
-            )
-        except Exception:
-            pass
+        """Ask update-viewer to re-check; runs in a thread so the window never blocks."""
+
+        def run() -> None:
+            try:
+                subprocess.run(
+                    [
+                        "timeout",
+                        "3",
+                        "dbus-send",
+                        "--session",
+                        "--type=method_call",
+                        "--dest=org.updateViewer",
+                        "/org/updateViewer",
+                        "org.updateViewer.Manager.poll_updates",
+                    ],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    check=False,
+                )
+            except Exception:  # noqa: BLE001 - best effort
+                pass
+
+        threading.Thread(target=run, name="poll-update-viewer", daemon=True).start()
 
     def _on_exited(self, code: int) -> None:
         # --root ends after the upgrade; prompt locally (like wait_for_enter).
         self._prompt_timer.stop()
         self._clear_active_prompt()
+        self._awaiting_exit = True  # before anything slow: input now only means "close"
         if self._closing:
             self._finish_close()
             return
@@ -1930,14 +1982,17 @@ class UpdateConsoleWindow(QMainWindow):
             return
         if code == 0:
             mark, color, text = "✓", "1;32", tr("final_ok")
-        elif self.view.declined_continue():
-            # zypper exits non-zero when "Continue?" is answered no; that is the
-            # user's choice, not a failure.
+        elif code in ZYPPER_SIGNAL_CODES or self.view.declined_prompt():
+            # The user chose to stop (answered no / pressed Ctrl+C): zypper exits
+            # non-zero, but that is not a failure.
             mark, color, text = "⚠", "1;33", tr("final_cancelled")
         else:
             mark, color, text = "✗", "1;31", tr("final_fail", code=code)
         self.setWindowTitle(f"{mark} {window_title()}")
         self.view.feed(f"\n\x1b[{color}m{mark} {text}\x1b[0m\n".encode("utf-8"))
+        hint = exit_hint(code) if mark == "✗" else None
+        if hint:
+            self.view.feed(f"  \x1b[2m{hint}\x1b[0m\n".encode("utf-8"))
         self.view.feed(tr("press_enter").encode("utf-8"))
         self._awaiting_exit = True
         if not self.isActiveWindow():
@@ -1956,6 +2011,8 @@ class UpdateConsoleWindow(QMainWindow):
 
 # pkexec exit codes: 126 = not authorized, 127 = dialog dismissed or not shown.
 PKEXEC_AUTH_FAILURE_CODES = (126, 127)
+# zypper 105 (killed by a signal) and 130 (shell died of SIGINT): Ctrl+C by the user.
+ZYPPER_SIGNAL_CODES = (105, 130)
 AUTH_AUTO_CLOSE_SECONDS = 5
 # Untranslated pkexec output replaced by our own message on those codes.
 PKEXEC_NOISE_LINES = (

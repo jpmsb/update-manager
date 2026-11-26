@@ -23,6 +23,7 @@ from PyQt6.QtGui import QColor, QFont, QFontDatabase, QIcon, QKeyEvent, QTextCha
 from PyQt6.QtWidgets import (
     QApplication,
     QHBoxLayout,
+    QLabel,
     QMainWindow,
     QMenu,
     QMessageBox,
@@ -46,6 +47,7 @@ MESSAGES = {
         "final_fail": "Update failed (exit code {code}).",
         "final_cancelled": "Update cancelled.",
         "stopping": "Stopping the update…",
+        "prompt_hint": "←/→ choose · Enter confirm",
         "stopping_wait": "Still stopping… the window closes when the update ends. Close again to leave it running in the background.",
         "hint_4": "The package manager reported an error. See the messages above.",
         "hint_6": "No repositories are configured.",
@@ -89,6 +91,7 @@ MESSAGES = {
         "final_fail": "A atualização falhou (código {code}).",
         "final_cancelled": "Atualização cancelada.",
         "stopping": "Interrompendo a atualização…",
+        "prompt_hint": "←/→ escolher · Enter confirmar",
         "stopping_wait": "Ainda interrompendo… a janela fecha quando a atualização terminar. Feche de novo para deixá-la rodando em segundo plano.",
         "hint_4": "O gerenciador de pacotes relatou um erro. Veja as mensagens acima.",
         "hint_6": "Nenhum repositório está configurado.",
@@ -132,6 +135,7 @@ MESSAGES = {
         "final_fail": "La actualización falló (código {code}).",
         "final_cancelled": "Actualización cancelada.",
         "stopping": "Deteniendo la actualización…",
+        "prompt_hint": "←/→ elegir · Enter confirmar",
         "stopping_wait": "Aún deteniendo… la ventana se cierra cuando termine la actualización. Ciérrela de nuevo para dejarla en segundo plano.",
         "hint_4": "El gestor de paquetes informó de un error. Consulte los mensajes anteriores.",
         "hint_6": "No hay repositorios configurados.",
@@ -175,6 +179,7 @@ MESSAGES = {
         "final_fail": "Aktualisierung fehlgeschlagen (Code {code}).",
         "final_cancelled": "Aktualisierung abgebrochen.",
         "stopping": "Aktualisierung wird angehalten…",
+        "prompt_hint": "←/→ wählen · Enter bestätigen",
         "stopping_wait": "Wird noch angehalten… das Fenster schließt, sobald die Aktualisierung endet. Erneut schließen, um sie im Hintergrund weiterlaufen zu lassen.",
         "hint_4": "Die Paketverwaltung hat einen Fehler gemeldet. Siehe die Meldungen oben.",
         "hint_6": "Es sind keine Repositories konfiguriert.",
@@ -218,6 +223,7 @@ MESSAGES = {
         "final_fail": "更新に失敗しました (コード {code})。",
         "final_cancelled": "更新はキャンセルされました。",
         "stopping": "更新を停止しています…",
+        "prompt_hint": "←/→ 選択 · Enter 決定",
         "stopping_wait": "まだ停止中です… 更新が終わるとウィンドウは閉じます。もう一度閉じると、バックグラウンドで実行を続けます。",
         "hint_4": "パッケージ管理がエラーを報告しました。上のメッセージを確認してください。",
         "hint_6": "リポジトリが設定されていません。",
@@ -614,6 +620,7 @@ class ConsoleView(QPlainTextEdit):
         self._active_default_opt: str | None = None
         self._selected_opt_idx: int | None = None
         self._prompt_buttons: list[QPushButton] = []
+        self._prompt_hint: QLabel | None = None
         self._help_buttons: list[tuple[int, int, str, QPushButton]] = []
         self._highlighted_help_span: tuple[int, int, int] | None = None
         self._is_canonical = lambda: True
@@ -872,6 +879,12 @@ class ConsoleView(QPlainTextEdit):
             self._btn_layout.addWidget(btn)
             self._prompt_buttons.append(btn)
 
+        # Keyboard hint: arrows pick an option, Enter confirms it.
+        hint = QLabel(tr("prompt_hint"), self._btn_container)
+        hint.setStyleSheet("color: #8b949e; font-size: 10pt; background: transparent; padding-left: 6px;")
+        self._btn_layout.addWidget(hint)
+        self._prompt_hint = hint
+
         # Also add per-line buttons for expanded '?' option descriptions (#1 : key - desc).
         prev = block.previous()
         steps = 0
@@ -964,6 +977,10 @@ class ConsoleView(QPlainTextEdit):
             self._btn_layout.removeWidget(btn)
             btn.deleteLater()
         self._prompt_buttons.clear()
+        if self._prompt_hint is not None:
+            self._btn_layout.removeWidget(self._prompt_hint)
+            self._prompt_hint.deleteLater()
+            self._prompt_hint = None
 
     def show_confirm_cancel_buttons(self, chosen_opt: str | None = None) -> None:
         """Replace option buttons with Confirm / Clear and highlight chosen option in text."""
@@ -2033,7 +2050,8 @@ class UpdateConsoleWindow(QMainWindow):
 
 # pkexec exit codes: 126 = not authorized, 127 = dialog dismissed or not shown.
 PKEXEC_AUTH_FAILURE_CODES = (126, 127)
-# zypper 105 (killed by a signal) and 130 (shell died of SIGINT): Ctrl+C by the user.
+# zypper 105 (killed by a signal): what Ctrl+C at a prompt really produces (measured).
+# 130 (shell died of SIGINT) is a defensive guess for Ctrl+C when no zypper is running.
 ZYPPER_SIGNAL_CODES = (105, 130)
 AUTH_AUTO_CLOSE_SECONDS = 5
 # Untranslated pkexec output replaced by our own message on those codes.

@@ -18,12 +18,14 @@ import termios
 import threading
 import time
 
-from PyQt6.QtCore import Qt, QSocketNotifier, QTimer, pyqtSignal, QObject
-from PyQt6.QtGui import QColor, QFont, QFontDatabase, QIcon, QKeyEvent, QTextCharFormat, QTextCursor
+from PyQt6.QtCore import QEvent, Qt, QSocketNotifier, QTimer, pyqtSignal, QObject
+from PyQt6.QtGui import QColor, QFont, QFontDatabase, QIcon, QKeyEvent, QTextCharFormat, QTextCursor, QTextDocument
 from PyQt6.QtWidgets import (
     QApplication,
+    QFileDialog,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QMainWindow,
     QMenu,
     QMessageBox,
@@ -47,6 +49,14 @@ MESSAGES = {
         "final_fail": "Update failed (exit code {code}).",
         "final_cancelled": "Update cancelled.",
         "stopping": "Stopping the update…",
+        "ctx_find": "Find… (Ctrl+F)",
+        "ctx_save": "Save output… (Ctrl+S)",
+        "ctx_zoom_in": "Zoom in (Ctrl +)",
+        "ctx_zoom_out": "Zoom out (Ctrl −)",
+        "ctx_zoom_reset": "Reset zoom (Ctrl 0)",
+        "search_placeholder": "Search…",
+        "save_title": "Save output",
+        "save_failed": "Could not save the file: {error}",
         "prompt_hint": "←/→ choose · Enter confirm",
         "stopping_wait": "Still stopping… the window closes when the update ends. Close again to leave it running in the background.",
         "hint_4": "The package manager reported an error. See the messages above.",
@@ -58,7 +68,7 @@ MESSAGES = {
         "auth_title": "Authentication cancelled",
         "auth_body": "No update was performed.",
         "auth_waiting": "Waiting for authentication…",
-        "auth_closing": "Closing in {n} s (or press ENTER)…",
+        "auth_closing": "Closing in {n} s (ENTER: close now · any other key: keep open)…",
         "prompt_notify": "Action required: {question}",
         "prompt_notify_continue": "Confirm to proceed with the update.",
         "notify_action_open": "Open",
@@ -91,6 +101,14 @@ MESSAGES = {
         "final_fail": "A atualização falhou (código {code}).",
         "final_cancelled": "Atualização cancelada.",
         "stopping": "Interrompendo a atualização…",
+        "ctx_find": "Buscar… (Ctrl+F)",
+        "ctx_save": "Salvar saída… (Ctrl+S)",
+        "ctx_zoom_in": "Aumentar (Ctrl +)",
+        "ctx_zoom_out": "Diminuir (Ctrl −)",
+        "ctx_zoom_reset": "Tamanho padrão (Ctrl 0)",
+        "search_placeholder": "Buscar…",
+        "save_title": "Salvar saída",
+        "save_failed": "Não foi possível salvar o arquivo: {error}",
         "prompt_hint": "←/→ escolher · Enter confirmar",
         "stopping_wait": "Ainda interrompendo… a janela fecha quando a atualização terminar. Feche de novo para deixá-la rodando em segundo plano.",
         "hint_4": "O gerenciador de pacotes relatou um erro. Veja as mensagens acima.",
@@ -102,7 +120,7 @@ MESSAGES = {
         "auth_title": "Autenticação cancelada",
         "auth_body": "Nenhuma atualização foi feita.",
         "auth_waiting": "Aguardando autenticação…",
-        "auth_closing": "Fechando em {n} s (ou pressione ENTER)…",
+        "auth_closing": "Fechando em {n} s (ENTER: fechar agora · outra tecla: manter aberta)…",
         "prompt_notify": "Ação necessária: {question}",
         "prompt_notify_continue": "Confirme para prosseguir com a atualização.",
         "notify_action_open": "Abrir",
@@ -135,6 +153,14 @@ MESSAGES = {
         "final_fail": "La actualización falló (código {code}).",
         "final_cancelled": "Actualización cancelada.",
         "stopping": "Deteniendo la actualización…",
+        "ctx_find": "Buscar… (Ctrl+F)",
+        "ctx_save": "Guardar salida… (Ctrl+S)",
+        "ctx_zoom_in": "Ampliar (Ctrl +)",
+        "ctx_zoom_out": "Reducir (Ctrl −)",
+        "ctx_zoom_reset": "Tamaño predeterminado (Ctrl 0)",
+        "search_placeholder": "Buscar…",
+        "save_title": "Guardar salida",
+        "save_failed": "No se pudo guardar el archivo: {error}",
         "prompt_hint": "←/→ elegir · Enter confirmar",
         "stopping_wait": "Aún deteniendo… la ventana se cierra cuando termine la actualización. Ciérrela de nuevo para dejarla en segundo plano.",
         "hint_4": "El gestor de paquetes informó de un error. Consulte los mensajes anteriores.",
@@ -146,7 +172,7 @@ MESSAGES = {
         "auth_title": "Autenticación cancelada",
         "auth_body": "No se realizó ninguna actualización.",
         "auth_waiting": "Esperando autenticación…",
-        "auth_closing": "Cerrando en {n} s (o pulse ENTER)…",
+        "auth_closing": "Cerrando en {n} s (ENTER: cerrar ahora · otra tecla: mantener abierta)…",
         "prompt_notify": "Acción requerida: {question}",
         "prompt_notify_continue": "Confirme para continuar con la actualización.",
         "notify_action_open": "Abrir",
@@ -179,6 +205,14 @@ MESSAGES = {
         "final_fail": "Aktualisierung fehlgeschlagen (Code {code}).",
         "final_cancelled": "Aktualisierung abgebrochen.",
         "stopping": "Aktualisierung wird angehalten…",
+        "ctx_find": "Suchen… (Ctrl+F)",
+        "ctx_save": "Ausgabe speichern… (Ctrl+S)",
+        "ctx_zoom_in": "Vergrößern (Ctrl +)",
+        "ctx_zoom_out": "Verkleinern (Ctrl −)",
+        "ctx_zoom_reset": "Standardgröße (Ctrl 0)",
+        "search_placeholder": "Suchen…",
+        "save_title": "Ausgabe speichern",
+        "save_failed": "Datei konnte nicht gespeichert werden: {error}",
         "prompt_hint": "←/→ wählen · Enter bestätigen",
         "stopping_wait": "Wird noch angehalten… das Fenster schließt, sobald die Aktualisierung endet. Erneut schließen, um sie im Hintergrund weiterlaufen zu lassen.",
         "hint_4": "Die Paketverwaltung hat einen Fehler gemeldet. Siehe die Meldungen oben.",
@@ -190,7 +224,7 @@ MESSAGES = {
         "auth_title": "Authentifizierung abgebrochen",
         "auth_body": "Es wurde kein Update durchgeführt.",
         "auth_waiting": "Warte auf Authentifizierung…",
-        "auth_closing": "Schließt in {n} s (oder ENTER drücken)…",
+        "auth_closing": "Schließt in {n} s (ENTER: jetzt schließen · andere Taste: offen lassen)…",
         "prompt_notify": "Aktion erforderlich: {question}",
         "prompt_notify_continue": "Bestätigen Sie, um mit dem Update fortzufahren.",
         "notify_action_open": "Öffnen",
@@ -223,6 +257,14 @@ MESSAGES = {
         "final_fail": "更新に失敗しました (コード {code})。",
         "final_cancelled": "更新はキャンセルされました。",
         "stopping": "更新を停止しています…",
+        "ctx_find": "検索… (Ctrl+F)",
+        "ctx_save": "出力を保存… (Ctrl+S)",
+        "ctx_zoom_in": "拡大 (Ctrl +)",
+        "ctx_zoom_out": "縮小 (Ctrl −)",
+        "ctx_zoom_reset": "標準サイズ (Ctrl 0)",
+        "search_placeholder": "検索…",
+        "save_title": "出力を保存",
+        "save_failed": "ファイルを保存できませんでした: {error}",
         "prompt_hint": "←/→ 選択 · Enter 決定",
         "stopping_wait": "まだ停止中です… 更新が終わるとウィンドウは閉じます。もう一度閉じると、バックグラウンドで実行を続けます。",
         "hint_4": "パッケージ管理がエラーを報告しました。上のメッセージを確認してください。",
@@ -234,7 +276,7 @@ MESSAGES = {
         "auth_title": "認証がキャンセルされました",
         "auth_body": "更新は行われていません。",
         "auth_waiting": "認証を待っています…",
-        "auth_closing": "{n} 秒後に閉じます (ENTER で今すぐ閉じる)…",
+        "auth_closing": "{n} 秒後に閉じます (ENTER: 今すぐ閉じる · 他のキー: 開いたままにする)…",
         "prompt_notify": "操作が必要です: {question}",
         "prompt_notify_continue": "更新を続行するには確認してください。",
         "notify_action_open": "開く",
@@ -264,19 +306,19 @@ MESSAGES = {
 
 # xfce4-terminal-like dark palette (normal + bright)
 ANSI_COLORS = [
-    "#000000",  # 0 black
-    "#cd0000",  # 1 red
+    "#767676",  # 0 black (text only: pure black is invisible on the black background)
+    "#e04a4a",  # 1 red (lightened for contrast)
     "#00cd00",  # 2 green
     "#cdcd00",  # 3 yellow
-    "#0000ee",  # 4 blue
-    "#cd00cd",  # 5 magenta
+    "#5f87ff",  # 4 blue (lightened: #0000ee is 2.2:1 on black)
+    "#d75fd7",  # 5 magenta (lightened for contrast)
     "#00cdcd",  # 6 cyan
     "#e5e5e5",  # 7 white
     "#7f7f7f",  # 8 bright black
     "#ff5f5f",  # 9 bright red (lightened for contrast on the dark background)
     "#00ff00",  # 10 bright green
     "#ffff00",  # 11 bright yellow
-    "#5c5cff",  # 12 bright blue
+    "#7f9fff",  # 12 bright blue (lightened for contrast)
     "#ff00ff",  # 13 bright magenta
     "#00ffff",  # 14 bright cyan
     "#ffffff",  # 15 bright white
@@ -287,6 +329,20 @@ DEFAULT_BG = "#000000"
 FONT_POINT_SIZE = 16
 READ_BUDGET_S = 0.008  # max time spent draining the PTY per event-loop turn
 READ_MAX_BYTES = 16384  # max bytes handed to the view per turn (bounds render time)
+
+
+MIN_CONTRAST = 4.5  # WCAG AA for normal text
+
+
+def contrast_ratio(a: QColor, b: QColor) -> float:
+    def lum(c: QColor) -> float:
+        def ch(v: float) -> float:
+            return v / 12.92 if v <= 0.03928 else ((v + 0.055) / 1.055) ** 2.4
+
+        return 0.2126 * ch(c.redF()) + 0.7152 * ch(c.greenF()) + 0.0722 * ch(c.blueF())
+
+    hi, lo = sorted((lum(a), lum(b)), reverse=True)
+    return (hi + 0.05) / (lo + 0.05)
 
 
 def detect_ui_lang() -> str:
@@ -413,7 +469,10 @@ class AnsiState:
         fmt = QTextCharFormat()
         color = QColor(self.fg)
         if self.dim and not self.bold:
-            color = color.darker(150)
+            dimmed = color.darker(150)
+            # Dim text must stay readable: keep the original colour when too dark.
+            if contrast_ratio(dimmed, QColor(DEFAULT_BG)) >= MIN_CONTRAST:
+                color = dimmed
         fmt.setForeground(color)
         font = pick_mono_font(self.font_size)
         font.setBold(self.bold)
@@ -596,6 +655,7 @@ class ConsoleView(QPlainTextEdit):
     prompt_confirm_clicked = pyqtSignal()
     prompt_clear_clicked = pyqtSignal()
     font_size_changed = pyqtSignal(int)
+    activity = pyqtSignal(int)  # any key press (key code), before it is handled
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -637,7 +697,7 @@ class ConsoleView(QPlainTextEdit):
                 border: 1px solid #444c56;
                 border-radius: 6px;
                 padding: 2px 10px;
-                font-size: 12pt;
+                font-size: __FS__pt;
             }
             QPushButton:hover {
                 background-color: #323942;
@@ -734,7 +794,7 @@ class ConsoleView(QPlainTextEdit):
         self._btn_layout = QHBoxLayout(self._btn_container)
         self._btn_layout.setContentsMargins(0, 0, 0, 0)
         self._btn_layout.setSpacing(6)
-        self._btn_container.setStyleSheet(self._button_qss)
+        self._btn_container.setStyleSheet(self._button_qss.replace("__FS__", "12"))
         self.verticalScrollBar().valueChanged.connect(self._reposition_prompt_buttons)
 
         self._scroll_bottom_btn = QPushButton("↓", self.viewport())
@@ -763,6 +823,27 @@ class ConsoleView(QPlainTextEdit):
         self._scroll_bottom_btn.clicked.connect(self._scroll_to_bottom)
         self._scroll_bottom_btn.setVisible(False)
 
+        # Search bar (Ctrl+F) and transient zoom indicator, overlaid on the viewport.
+        self._search = QLineEdit(self.viewport())
+        self._search.setPlaceholderText(tr("search_placeholder"))
+        self._search.setClearButtonEnabled(True)
+        self._search.setFixedWidth(300)
+        self._search.setStyleSheet(self._search_qss(found=True))
+        self._search.textChanged.connect(lambda _t: self._find(backwards=False, restart=True))
+        self._search.installEventFilter(self)
+        self._search.setVisible(False)
+
+        self._toast = QLabel(self.viewport())
+        self._toast.setStyleSheet(
+            "background-color: rgba(36, 41, 47, 230); color: #c9d1d9; border: 1px solid #444c56;"
+            " border-radius: 6px; padding: 4px 10px; font-size: 11pt;"
+        )
+        self._toast.setVisible(False)
+        self._toast_timer = QTimer(self)
+        self._toast_timer.setSingleShot(True)
+        self._toast_timer.setInterval(1200)
+        self._toast_timer.timeout.connect(lambda: self._toast.setVisible(False))
+
         self.setStyleSheet(
             f"""
             QPlainTextEdit {{
@@ -780,6 +861,102 @@ class ConsoleView(QPlainTextEdit):
         super().resizeEvent(event)
         self._reposition_prompt_buttons()
         self._position_scroll_bottom_button()
+        self._position_overlays()
+
+    # ---- search (Ctrl+F) -------------------------------------------------
+    @staticmethod
+    def _search_qss(found: bool) -> str:
+        border = "#444c56" if found else "#da3633"
+        return (
+            f"QLineEdit {{ background-color: #0d1117; color: #c9d1d9; border: 1px solid {border};"
+            " border-radius: 6px; padding: 4px 8px; font-size: 11pt; }}"
+            " QLineEdit:focus { border-color: " + ("#58a6ff" if found else "#da3633") + "; }"
+        )
+
+    def _position_overlays(self) -> None:
+        vp = self.viewport()
+        self._search.move(max(14, vp.width() - self._search.width() - 14), 14)
+        self._search.raise_()
+        self._toast.move(14, 14)
+        self._toast.raise_()
+
+    def show_search(self) -> None:
+        self._search.setVisible(True)
+        self._position_overlays()
+        self._search.setFocus(Qt.FocusReason.ShortcutFocusReason)
+        self._search.selectAll()
+
+    def close_search(self) -> None:
+        self._search.setVisible(False)
+        cur = self.textCursor()
+        if cur.hasSelection():  # a leftover selection would turn Ctrl+C into "copy"
+            cur.clearSelection()
+            self.setTextCursor(cur)
+        self.setFocus(Qt.FocusReason.OtherFocusReason)
+
+    def _find(self, backwards: bool, restart: bool = False) -> None:
+        text = self._search.text()
+        if not text:
+            self._search.setStyleSheet(self._search_qss(found=True))
+            return
+        flags = QTextDocument.FindFlag.FindBackward if backwards else QTextDocument.FindFlag(0)
+        doc = self.document()
+        cur = self.textCursor()
+        if restart and cur.hasSelection():  # incremental typing keeps the current match
+            cur.setPosition(cur.selectionStart())
+        found = doc.find(text, cur, flags)
+        if found.isNull():  # wrap around
+            wrap = QTextCursor(doc)
+            wrap.movePosition(
+                QTextCursor.MoveOperation.End if backwards else QTextCursor.MoveOperation.Start
+            )
+            found = doc.find(text, wrap, flags)
+        self._search.setStyleSheet(self._search_qss(found=not found.isNull()))
+        if not found.isNull():
+            self.setTextCursor(found)
+            self.ensureCursorVisible()
+
+    def eventFilter(self, obj, event) -> bool:  # noqa: N802
+        if obj is self._search and event.type() == QEvent.Type.KeyPress:
+            key = event.key()
+            if key == Qt.Key.Key_Escape:
+                self.close_search()
+                return True
+            if key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+                self._find(backwards=bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier))
+                return True
+        return super().eventFilter(obj, event)
+
+    # ---- save output (Ctrl+S) --------------------------------------------
+    def save_output(self) -> None:
+        default = os.path.join(os.path.expanduser("~"), time.strftime("update-console-%Y%m%d-%H%M.log"))
+        path, _filter = QFileDialog.getSaveFileName(self, tr("save_title"), default, "Log (*.log *.txt);;*")
+        if not path:
+            return
+        try:
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write(self.toPlainText())
+        except OSError as exc:
+            QMessageBox.warning(self, tr("save_title"), tr("save_failed", error=exc))
+
+    # ---- zoom feedback ---------------------------------------------------
+    def _ui_font_pt(self) -> int:
+        return max(9, round(self._font_size * 0.75))  # 16 pt console -> 12 pt buttons
+
+    def _hint_qss(self) -> str:
+        return f"color: #8b949e; font-size: {max(8, self._ui_font_pt() - 2)}pt; background: transparent; padding-left: 6px;"
+
+    def _apply_ui_scale(self) -> None:
+        self._btn_container.setStyleSheet(self._button_qss.replace("__FS__", str(self._ui_font_pt())))
+        if self._prompt_hint is not None:
+            self._prompt_hint.setStyleSheet(self._hint_qss())
+
+    def _show_toast(self, text: str) -> None:
+        self._toast.setText(text)
+        self._toast.adjustSize()
+        self._position_overlays()
+        self._toast.setVisible(True)
+        self._toast_timer.start()
 
     def _restyle_prompt_chips(self) -> None:
         selected_opt = (
@@ -881,7 +1058,7 @@ class ConsoleView(QPlainTextEdit):
 
         # Keyboard hint: arrows pick an option, Enter confirms it.
         hint = QLabel(tr("prompt_hint"), self._btn_container)
-        hint.setStyleSheet("color: #8b949e; font-size: 10pt; background: transparent; padding-left: 6px;")
+        hint.setStyleSheet(self._hint_qss())
         self._btn_layout.addWidget(hint)
         self._prompt_hint = hint
 
@@ -1046,6 +1223,7 @@ class ConsoleView(QPlainTextEdit):
     def _paste_from_clipboard(self) -> None:
         clip = QApplication.clipboard()
         if clip is not None and clip.text():
+            self._scroll_to_bottom()
             self._snap_cursor_to_input()
             self.input_bytes.emit(clip.text().encode("utf-8", errors="replace"))
 
@@ -1059,6 +1237,14 @@ class ConsoleView(QPlainTextEdit):
         clip = QApplication.clipboard()
         paste_act.setEnabled(bool(clip and clip.text()))
         paste_act.triggered.connect(self._paste_from_clipboard)
+
+        menu.addSeparator()
+        menu.addAction(tr("ctx_find")).triggered.connect(self.show_search)
+        menu.addAction(tr("ctx_save")).triggered.connect(self.save_output)
+        menu.addSeparator()
+        menu.addAction(tr("ctx_zoom_in")).triggered.connect(lambda: self.set_font_size(self._font_size + 1))
+        menu.addAction(tr("ctx_zoom_out")).triggered.connect(lambda: self.set_font_size(self._font_size - 1))
+        menu.addAction(tr("ctx_zoom_reset")).triggered.connect(lambda: self.set_font_size(FONT_POINT_SIZE))
 
         menu.exec(event.globalPos())
 
@@ -1081,7 +1267,9 @@ class ConsoleView(QPlainTextEdit):
         for _bn, _sc, _ol, hbtn in self._help_buttons:
             hbtn.setFont(mono)
             hbtn.adjustSize()
+        self._apply_ui_scale()
         self._reposition_prompt_buttons()
+        self._show_toast(f"{clamped} pt")
         self.font_size_changed.emit(clamped)
 
     def wheelEvent(self, event) -> None:  # noqa: N802
@@ -1106,7 +1294,14 @@ class ConsoleView(QPlainTextEdit):
         event.accept()
 
     def keyPressEvent(self, event: QKeyEvent) -> None:  # noqa: N802
+        self.activity.emit(int(event.key()))
         if event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+            if event.key() == Qt.Key.Key_F:
+                self.show_search()
+                return
+            if event.key() == Qt.Key.Key_S:
+                self.save_output()
+                return
             if event.key() in (Qt.Key.Key_Plus, Qt.Key.Key_Equal):
                 self.set_font_size(self._font_size + 1)
                 return
@@ -1186,10 +1381,12 @@ class ConsoleView(QPlainTextEdit):
             self.input_bytes.emit(seq_map[event.key()])
             return
         if event.key() in (Qt.Key.Key_C,) and event.modifiers() & Qt.KeyboardModifier.ControlModifier:
+            self._scroll_to_bottom()  # like a terminal: typing jumps back to the live output
             self._snap_cursor_to_input()
             self.input_bytes.emit(b"\x03")
             return
         if event.key() == Qt.Key.Key_Backspace:
+            self._scroll_to_bottom()
             self._snap_cursor_to_input()
             self.input_bytes.emit(b"\x7f")
             return
@@ -1199,6 +1396,7 @@ class ConsoleView(QPlainTextEdit):
             self.input_bytes.emit(b"\r")
             return
         if event.key() == Qt.Key.Key_Tab:
+            self._scroll_to_bottom()
             self._snap_cursor_to_input()
             self.input_bytes.emit(b"\t")
             return
@@ -1208,6 +1406,7 @@ class ConsoleView(QPlainTextEdit):
             return
         text = "".join(ch for ch in event.text() if ch >= " " and ord(ch) != 0x7F)
         if text:
+            self._scroll_to_bottom()
             self._snap_cursor_to_input()
             self.input_bytes.emit(text.encode("utf-8", errors="replace"))
             return
@@ -1724,6 +1923,8 @@ class UpdateConsoleWindow(QMainWindow):
         self._closing = False  # shutdown of the running upgrade in progress
         self._close_ready = False  # closeEvent may now accept
         self._shutdown_waiting = False  # signals sent, still waiting for the upgrade to end
+        self._auto_close_active = False  # authentication-cancelled countdown running
+        self._user_interrupted = False  # the user sent Ctrl+C to the upgrade
 
         self._stop_timer = QTimer(self)  # grace period before escalating to SIGHUP
         self._stop_timer.setSingleShot(True)
@@ -1749,6 +1950,7 @@ class UpdateConsoleWindow(QMainWindow):
         self.view.prompt_confirm_clicked.connect(self._confirm_prompt)
         self.view.prompt_clear_clicked.connect(self._clear_prompt_input)
         self.view.font_size_changed.connect(self._sync_winsize)
+        self.view.activity.connect(self._on_activity)
         QTimer.singleShot(0, self._start_session)
 
     def showEvent(self, event) -> None:  # noqa: N802
@@ -1960,6 +2162,8 @@ class UpdateConsoleWindow(QMainWindow):
             if b"\r" in data or b"\n" in data:
                 self.close()
             return
+        if b"\x03" in data:
+            self._user_interrupted = True
         if b"\r" in data or b"\n" in data or b"\x03" in data:
             self._clear_active_prompt()
         elif data in (b"\x7f", b"\x08"):
@@ -2017,13 +2221,14 @@ class UpdateConsoleWindow(QMainWindow):
             )
             self._awaiting_exit = True
             self._auto_close_left = AUTH_AUTO_CLOSE_SECONDS
+            self._auto_close_active = True
             self._auto_close_tick(first=True)
             return
         if code == 0:
             mark, color, text = "✓", "1;32", tr("final_ok")
-        elif code in ZYPPER_SIGNAL_CODES or self.view.declined_prompt():
+        elif code in ZYPPER_SIGNAL_CODES or self._user_interrupted or self.view.declined_prompt():
             # The user chose to stop (answered no / pressed Ctrl+C): zypper exits
-            # non-zero, but that is not a failure.
+            # non-zero (105 at a prompt, 8 while committing), but that is not a failure.
             mark, color, text = "⚠", "1;33", tr("final_cancelled")
         else:
             mark, color, text = "✗", "1;31", tr("final_fail", code=code)
@@ -2037,8 +2242,17 @@ class UpdateConsoleWindow(QMainWindow):
         if not self.isActiveWindow():
             QApplication.alert(self)  # flash the taskbar entry: the update is over
 
+    def _on_activity(self, key: int) -> None:
+        """Any key except Enter cancels the countdown and keeps the window open."""
+        if not self._auto_close_active or key in (int(Qt.Key.Key_Return), int(Qt.Key.Key_Enter)):
+            return
+        self._auto_close_active = False
+        self.view.feed(("\r\x1b[2K" + tr("press_enter")).encode("utf-8"))
+
     def _auto_close_tick(self, first: bool = False) -> None:
         """Rewrite the countdown line in place, then close the window at zero."""
+        if not self._auto_close_active:
+            return
         if self._auto_close_left <= 0:
             self.close()
             return

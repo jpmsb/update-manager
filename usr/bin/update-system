@@ -5,6 +5,10 @@ set -euo pipefail
 
 GITHUB_API="https://api.github.com/repos/jpmsb/update-manager/releases/latest"
 PACKAGE_NAME="update-manager"
+# Exit status of the last zypper upgrade, reported to the caller (update-console shows it).
+UPGRADE_RC=0
+# Set by update-console (--root --console): it reports the result itself.
+CONSOLE_REPORTS_RESULT=0
 ZYPPER_UPGRADE=(/usr/bin/zypper dist-upgrade --auto-agree-with-licenses --replacefiles --force-resolution)
 
 detect_ui_lang() {
@@ -466,7 +470,10 @@ run_upgrade() {
     rc=$?
     set -e
 
-    if [ "$rc" -ne 0 ]; then
+    # zypper 100-103 are informational (updates pending, reboot/restart suggested), not failures.
+    case "$rc" in 100|101|102|103) rc=0 ;; esac
+    UPGRADE_RC=$rc
+    if [ "$rc" -ne 0 ] && [ "$CONSOLE_REPORTS_RESULT" -eq 0 ]; then
         echo
         err "$(msg something_wrong)"
     fi
@@ -491,6 +498,8 @@ run_as_root() {
 
     rm -rf /var/tmp/rpm-tmp.* /var/tmp/zypp.*
     rm -f /var/log/update-checker/updates.xml
+
+    exit "$UPGRADE_RC"
 }
 
 wait_for_enter() {
@@ -576,7 +585,8 @@ open_update_console() {
 }
 
 run_interactive_upgrade() {
-    "$RUN_PRIVILEGED" "$0" --root
+    # A non-zero status (e.g. zypper answered "no") must not skip wait_for_enter under set -e.
+    "$RUN_PRIVILEGED" "$0" --root || true
     wait_for_enter
     poll_update_viewer
 }
@@ -589,6 +599,9 @@ fi
 
 case "${1:-}" in
     --root)
+        if [ "${2:-}" = "--console" ]; then
+            CONSOLE_REPORTS_RESULT=1
+        fi
         run_as_root
         ;;
     --launch)

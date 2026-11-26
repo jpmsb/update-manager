@@ -40,7 +40,9 @@ MESSAGES = {
     "en": {
         "window_title": "Install updates",
         "press_enter": "\nPress ENTER to exit…\n",
-        "process_exited": "\n[update-console] process exited with code {code}\n",
+        "final_ok": "Update finished successfully.",
+        "final_fail": "Update failed (exit code {code}).",
+        "final_cancelled": "Update cancelled.",
         "auth_title": "Authentication cancelled",
         "auth_body": "No update was performed.",
         "auth_waiting": "Waiting for authentication…",
@@ -73,7 +75,9 @@ MESSAGES = {
     "pt": {
         "window_title": "Instalar atualizações",
         "press_enter": "\nPressione ENTER para sair…\n",
-        "process_exited": "\n[update-console] processo terminou com código {code}\n",
+        "final_ok": "Atualização concluída com sucesso.",
+        "final_fail": "A atualização falhou (código {code}).",
+        "final_cancelled": "Atualização cancelada.",
         "auth_title": "Autenticação cancelada",
         "auth_body": "Nenhuma atualização foi feita.",
         "auth_waiting": "Aguardando autenticação…",
@@ -106,7 +110,9 @@ MESSAGES = {
     "es": {
         "window_title": "Instalar actualizaciones",
         "press_enter": "\nPulse ENTER para salir…\n",
-        "process_exited": "\n[update-console] el proceso terminó con código {code}\n",
+        "final_ok": "Actualización completada correctamente.",
+        "final_fail": "La actualización falló (código {code}).",
+        "final_cancelled": "Actualización cancelada.",
         "auth_title": "Autenticación cancelada",
         "auth_body": "No se realizó ninguna actualización.",
         "auth_waiting": "Esperando autenticación…",
@@ -139,7 +145,9 @@ MESSAGES = {
     "de": {
         "window_title": "Aktualisierungen installieren",
         "press_enter": "\nDrücken Sie ENTER zum Beenden…\n",
-        "process_exited": "\n[update-console] Prozess beendet mit Code {code}\n",
+        "final_ok": "Aktualisierung erfolgreich abgeschlossen.",
+        "final_fail": "Aktualisierung fehlgeschlagen (Code {code}).",
+        "final_cancelled": "Aktualisierung abgebrochen.",
         "auth_title": "Authentifizierung abgebrochen",
         "auth_body": "Es wurde kein Update durchgeführt.",
         "auth_waiting": "Warte auf Authentifizierung…",
@@ -172,7 +180,9 @@ MESSAGES = {
     "ja": {
         "window_title": "更新をインストール",
         "press_enter": "\n終了するには ENTER を押してください…\n",
-        "process_exited": "\n[update-console] プロセスはコード {code} で終了しました\n",
+        "final_ok": "更新が正常に完了しました。",
+        "final_fail": "更新に失敗しました (コード {code})。",
+        "final_cancelled": "更新はキャンセルされました。",
         "auth_title": "認証がキャンセルされました",
         "auth_body": "更新は行われていません。",
         "auth_waiting": "認証を待っています…",
@@ -1196,6 +1206,16 @@ class ConsoleView(QPlainTextEdit):
             block = block.next()
         return False
 
+    def declined_continue(self) -> bool:
+        """True if the last answered "Continue?" prompt was answered with a negative option."""
+        block = self.document().lastBlock()
+        while block.isValid():
+            m = _ANSWERED_PROMPT_RE.match(block.text().rstrip())
+            if m and is_continue_question(m.group(1).strip()):
+                return m.group(2).lower() in NEGATIVE_ANSWERS
+            block = block.previous()
+        return False
+
     def remove_lines(self, texts: tuple[str, ...]) -> None:
         """Delete finished lines whose text equals one of ``texts`` (plus the blank line after each)."""
         doc = self.document()
@@ -1404,6 +1424,8 @@ class ConsoleView(QPlainTextEdit):
 
 
 _PROMPT_RE = re.compile(r"^(.*?)\[([^\[\]\n]+)\](?:\s*\(([^()\n]+)\))?\s*[:?]\s*$")
+_ANSWERED_PROMPT_RE = re.compile(r"^(.*?)\[[^\[\]\n]+\](?:\s*\([^()\n]+\))?\s*[:?]\s*(\S+)$")
+NEGATIVE_ANSWERS = ("n", "no", "não", "nein")
 _HELP_OPT_RE = re.compile(r"^\s*(#\d+\s*:\s*([^\s]+))\s+-\s+.+$")
 
 
@@ -1651,12 +1673,12 @@ class UpdateConsoleWindow(QMainWindow):
         self._sync_winsize()
 
     def _start_session(self) -> None:
-        argv = ["/usr/bin/pkexec", UPDATE_SYSTEM, "--root"]
+        argv = ["/usr/bin/pkexec", UPDATE_SYSTEM, "--root", "--console"]
         if not os.path.isfile(UPDATE_SYSTEM):
             # Dev / unpackaged fallback
             here = os.path.abspath(os.path.join(os.path.dirname(__file__), "update-system"))
             if os.path.isfile(here):
-                argv = ["/usr/bin/pkexec", here, "--root"]
+                argv = ["/usr/bin/pkexec", here, "--root", "--console"]
         self._got_output = False
         self._waiting_text = f"● {tr('auth_waiting')}"
         self._session = PtySession(argv, self)
@@ -1762,6 +1784,8 @@ class UpdateConsoleWindow(QMainWindow):
                     else tr("prompt_notify", question=last_block.text().strip())
                 )
                 self._notifier.show(tr("window_title"), body, tr("notify_action_open"))
+                # Fallback for when D-Bus notifications are unavailable.
+                QApplication.alert(self)
             return
 
         if (
@@ -1840,10 +1864,20 @@ class UpdateConsoleWindow(QMainWindow):
             self._auto_close_left = AUTH_AUTO_CLOSE_SECONDS
             self._auto_close_tick(first=True)
             return
-        if code != 0:
-            self.view.feed(tr("process_exited", code=code).encode("utf-8"))
+        if code == 0:
+            mark, color, text = "✓", "1;32", tr("final_ok")
+        elif self.view.declined_continue():
+            # zypper exits non-zero when "Continue?" is answered no; that is the
+            # user's choice, not a failure.
+            mark, color, text = "⚠", "1;33", tr("final_cancelled")
+        else:
+            mark, color, text = "✗", "1;31", tr("final_fail", code=code)
+        self.setWindowTitle(f"{mark} {window_title()}")
+        self.view.feed(f"\n\x1b[{color}m{mark} {text}\x1b[0m\n".encode("utf-8"))
         self.view.feed(tr("press_enter").encode("utf-8"))
         self._awaiting_exit = True
+        if not self.isActiveWindow():
+            QApplication.alert(self)  # flash the taskbar entry: the update is over
 
     def _auto_close_tick(self, first: bool = False) -> None:
         """Rewrite the countdown line in place, then close the window at zero."""

@@ -11,7 +11,7 @@ close_packagekit(){
             counter=$((counter + 1))
         fi
 
-        pkill -f "packagekitd" -9
+        pkill -9 -x packagekitd
         sleep 0.1
     done
 }

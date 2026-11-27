@@ -294,7 +294,7 @@ stop_packagekit() {
     local end=$((SECONDS + timeout_sec))
 
     while [ "$SECONDS" -lt "$end" ]; do
-        pkill -f "packagekitd" -9 2>/dev/null || true
+        pkill -9 -x packagekitd 2>/dev/null || true
         sleep 0.1
     done
 }

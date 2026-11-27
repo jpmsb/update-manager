@@ -545,6 +545,15 @@ class PtySession(QObject):
         except OSError:
             return True
 
+    def is_echo_off(self) -> bool:
+        """True when the child disabled echo (e.g. a password prompt): Enter is wanted."""
+        if self._master_fd < 0:
+            return False
+        try:
+            return not (termios.tcgetattr(self._master_fd)[3] & termios.ECHO)
+        except OSError:
+            return False
+
     def write(self, data: bytes) -> None:
         if self._master_fd < 0 or not data:
             return
@@ -684,6 +693,7 @@ class ConsoleView(QPlainTextEdit):
         self._help_buttons: list[tuple[int, int, str, QPushButton]] = []
         self._highlighted_help_span: tuple[int, int, int] | None = None
         self._is_canonical = lambda: True
+        self._enter_wanted = lambda: True  # window decides if Enter has any use right now
         self._font_size = FONT_POINT_SIZE
         self._follow_tail = True
         self._updating_scroll = False
@@ -869,7 +879,7 @@ class ConsoleView(QPlainTextEdit):
         border = "#444c56" if found else "#da3633"
         return (
             f"QLineEdit {{ background-color: #0d1117; color: #c9d1d9; border: 1px solid {border};"
-            " border-radius: 6px; padding: 4px 8px; font-size: 11pt; }}"
+            " border-radius: 6px; padding: 4px 8px; font-size: 11pt; }"
             " QLineEdit:focus { border-color: " + ("#58a6ff" if found else "#da3633") + "; }"
         )
 
@@ -1391,6 +1401,10 @@ class ConsoleView(QPlainTextEdit):
             self.input_bytes.emit(b"\x7f")
             return
         if event.key() in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            # Ignore Enter while no prompt is waiting, so mashing it during a
+            # non-interactive step does not scroll blank lines into the output.
+            if not self._enter_wanted():
+                return
             self._scroll_to_bottom()
             self._snap_cursor_to_input()
             self.input_bytes.emit(b"\r")
@@ -2031,6 +2045,7 @@ class UpdateConsoleWindow(QMainWindow):
         self._waiting_text = f"● {tr('auth_waiting')}"
         self._session = PtySession(argv, self)
         self.view._is_canonical = self._session.is_canonical
+        self.view._enter_wanted = self._enter_wanted
         self._session.output.connect(self._on_pty_output)
         self._session.exited.connect(self._on_exited)
         self._sync_winsize()
@@ -2156,6 +2171,16 @@ class UpdateConsoleWindow(QMainWindow):
         cols = max(int(self.view.viewport().width() / char_w), 20)
         rows = max(int(self.view.viewport().height() / char_h), 5)
         self._session.set_winsize(rows, cols)
+
+    def _enter_wanted(self) -> bool:
+        """Enter is only meaningful at a prompt, at a hidden-input (password) read or to close."""
+        if self._awaiting_exit:
+            return True
+        if self._session is None:
+            return False
+        if self._active_prompt_sig is not None or self._confirm_mode or self._typed_shortcut:
+            return True
+        return self._session.is_echo_off()
 
     def _on_input(self, data: bytes) -> None:
         if self._awaiting_exit:
